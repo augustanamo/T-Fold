@@ -403,11 +403,12 @@ private fun DrawScope.drawAlbums(
 
         // 卡位状态 → 盒盖开合度：
         //  卡座里那盘 = 常开（带子已被拿走）
-        //  正在装/退的那盘 = 跟着状态机的开合动画走
+        //  正在装/退的那盘 = 跟着状态机的开合动画走（**开度 0 也要算**：合着的也是这只盒子）
         //  其余 = 合着
-        val open = when (tape.id) {
-            machine.loadedId -> 1f
-            machine.boxAnimId -> machine.boxOpen
+        val animateBox = tape.id == machine.boxAnimId
+        val open = when {
+            tape.id == machine.loadedId -> 1f
+            animateBox -> machine.boxOpen
             else -> 0f
         }
 
@@ -416,8 +417,10 @@ private fun DrawScope.drawAlbums(
 
         translate(cx - w / 2f + w * 0.10f * gone, y + h * 0.66f * gone) {
             scale(1f - 0.20f * gone, pivot = Offset(w / 2f, h / 2f)) {
-                if (open > 0.004f) {
-                    // 盒盖正在开 / 已开 —— 从合到开是连续的，不会再"先消失再出现"
+                if (open > 0.004f || animateBox) {
+                    // 盒盖正在开 / 已开 —— 从合到开是连续的，不会再"先消失再出现"。
+                    // `animateBox` 这一支是给"开度还是 0"那一帧用的：装带的带子是在
+                    // 盒子还没动时就已经放进盒里（incoming 先置上），少了它开头会闪一个空框。
                     drawCoverCard(tape, 0f, 0f, w, h, open, a * (1f - gone), machine.coverArt[tape.id])
                 } else if (away) {
                     // 磁带正飞往/飞离卡座，盒子又还没开始开 —— 卡位留一个精确的空框

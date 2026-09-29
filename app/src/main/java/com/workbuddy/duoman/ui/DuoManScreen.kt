@@ -220,9 +220,11 @@ private fun FlightLayer(machine: DuoMachine, density: Float) {
 /**
  * 一盘飞行中的磁带：沿 src→dst 的弧线走。
  *
- * 起点仍在盒子里（不能取盖板背后，也不能伸出盒外）：
- * 磁带按盒宽画、起点取腔里靠盒口那一侧（0.55 盒宽），于是 p=0 时它正好躺在内腔上，
- * 被盖板遮掉左边 2/3、从盒口露出右边一截 —— 接着才滑出去、缩小、落进卡座。
+ * p = 0 是**躺在盒腔里**的静止位（这一点很关键：装带时盒子一开，带子就已经在那儿了）：
+ *  —— 尺寸比盒子收一圈（盒与带同为 1.56 宽高比），中心取偏盒口那一侧，
+ *     于是它的两个轮毂正好落在盖板自由边之外，从盒口看得见；
+ *  —— 出盒阶段（appear）再抬一点、开始沿弧线飞向卡座。
+ * 退带就是这条路径的倒放：带子从右侧滑回盒腔、被盖板逐渐吃掉，盖合上。
  */
 private fun DrawScope.drawFlyingTape(
     tape: Tape,
@@ -232,19 +234,19 @@ private fun DrawScope.drawFlyingTape(
     density: Float,
 ) {
     val p2 = p.coerceIn(0f, 1f)
-    val appear = 0.26f                              // 「出现」阶段占比
+    val appear = 0.18f                              // 「出盒 / 回盒」阶段占比
     val q = ramp(p2, appear, 1f)                    // 飞行阶段 0..1
-    val pop = mix(0.92f, 1f, ramp(p2, 0f, appear))  // 在盒里时略小于盒体，出盒后长到原大
 
     val boxW = src.width
     val boxH = src.height
-    val fromX = src.left + src.width * 0.55f        // 盒口内侧 —— 起点在腔里，不在盖板背后
-    val cx = mix(fromX, dst.center.x, q)
+    val rest = 0.76f                                // 躺在盒里时的尺寸（相对盒宽）
+    val restX = src.left + src.width * 0.60f        // 盒口内侧的模位一带
+    val lift = ramp(p2, 0f, appear) * 12f * density  // 出盒先抬一点，再飞
+    val cx = mix(restX, dst.center.x, q)
     val cy = mix(src.center.y, dst.center.y, q) -
-        abs(dst.center.x - fromX) * 0.12f * sin((PI * q).toFloat()) -
-        (1f - ramp(p2, 0f, appear)) * 14f * density
-    val sx = mix(1f, dst.width / boxW, q) * pop
-    val sy = mix(1f, dst.height / boxH, q) * pop
+        lift - abs(dst.center.x - restX) * 0.12f * sin((PI * q).toFloat())
+    val sx = mix(rest, dst.width / boxW, q)
+    val sy = mix(rest, dst.height / boxH, q)
 
     // 围绕磁带中心做旋转/缩放（translate 到中心 → rotate/scale → 平移回左上角）
     withTransform({

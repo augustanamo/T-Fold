@@ -398,6 +398,18 @@ class DuoMachine(
         index = i.coerceIn(0, tapes.lastIndex)
     }
 
+    /**
+     * 让左栏滚回 [id] 这盘带自己的那一格。
+     *
+     * 装带 / 退带前都必须先对齐：飞行的起止矩形取的是**当前居中那张卡**的矩形
+     * （左栏上报的 `cardRect`），而库里被拖动过之后，居中的早就不是这盘带了 ——
+     * 不对齐的话，退带会把带子送回别人的盒子、换带会让旧带落进新带的盒子。
+     */
+    private fun scrollToTape(id: String?) {
+        val i = tapes.indexOfFirst { it.id == id }
+        if (i >= 0) jumpTo(i)
+    }
+
     /** 让左栏跟着翻到第 [i] 盘（新加磁带之后主动调用）；左栏自己翻页用的是 [focusIndex]，不会触发回跳。 */
     private fun jumpTo(i: Int) {
         index = i.coerceIn(0, tapes.lastIndex)
@@ -492,6 +504,8 @@ class DuoMachine(
                 // 旧带的飞行要先把 flyOut 拨到 1（= 在卡座里）再从 1 → 0，
                 // 否则它起始值就是 0，等于原地不动、直接凭空消失。
                 // 它的盒子本来就是开着的（带子在卡座里），所以先置 1，落座后再合盖。
+                scrollToTape(prev)   // 旧带飞回**它自己**的盒子（库里可能已被拖到别处）
+                delay(60)            // 等这一帧翻页落定，cardRect 才是旧带的盒子
                 boxAnimId = prev
                 box.snapTo(1f)
                 loadedId = null
@@ -507,12 +521,18 @@ class DuoMachine(
                 boxAnimId = null
                 delay(80)
             }
-            // 新带：先把盒子打开（盖向右转开），磁带才飞出去 —— 顺序不能颠倒
+            // 新带的盒子：先把左栏滚到它那一格，再开盒
+            scrollToTape(target.id)
+            delay(60)
             boxAnimId = target.id
             box.snapTo(0f)
-            box.animateTo(1f, tween(360, easing = FastOutSlowInEasing))
+            // `incoming` **先于开盒**置上：盖还没动时盖板 = 整只盒子宽，带子被完整遮住；
+            // 盖一掀开，它就从盒口把**已经躺在盒腔里**的带子一点点露出来。
+            // （曾经等盒子开完才置 incoming —— 于是开盒那一下里面是空的，带子像后来才出现。）
             incoming = target.id
             flyIn.snapTo(0f)
+            box.animateTo(1f, tween(360, easing = FastOutSlowInEasing))
+            delay(150)   // 留一拍：让眼睛看清"带子本来就在盒里"，别一开就飞走
             flyIn.animateTo(1f, tween(620, easing = FastOutSlowInEasing))
             audio.insertClack()
 
@@ -577,7 +597,11 @@ class DuoMachine(
         }
         flightJob = scope.launch {
             audio.ejectThunk()
-            // 退带 = 装带的倒放：带子飞回盒里，然后盖合上
+            // 退带 = 装带的倒放：带子飞回盒里，然后盖合上。
+            // 先滚回**这盘带自己的盒子** —— 用户在库里拖过之后，居中的那格通常是别的带，
+            // 不滚回去的话这盘会被送回别人的卡位（"磁带回到别的盘的位置"）。
+            scrollToTape(cur)
+            delay(60)
             boxAnimId = cur
             box.snapTo(1f)
             outgoing = cur
