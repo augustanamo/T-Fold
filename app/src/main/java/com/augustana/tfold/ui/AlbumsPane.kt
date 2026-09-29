@@ -1,5 +1,7 @@
 package com.augustana.tfold.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -40,7 +42,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.rememberTextMeasurer
-import com.augustana.tfold.machine.DuoMachine
+import com.augustana.tfold.machine.FoldMachine
 import com.augustana.tfold.ui.parts.CASSETTE_H_RATIO
 import com.augustana.tfold.ui.parts.hairPx
 import kotlinx.coroutines.Job
@@ -63,6 +65,14 @@ private const val HOLD_MS = 3000
 /** 删掉一格后「后一盘顶上来」的滑行时长；状态机的抽走动画也差不多这么长，两者同时跑。 */
 private const val REMOVE_MS = 280
 
+/**
+ * 「换封面」的确认时长 —— 比删除那 3 秒短得多。
+ *
+ * 长按的落点是**看这一格能不能删**决定的：能删 = 3 秒抽走（不可撤销，值得慢慢想清楚）；
+ * 出厂那盘空白带删不掉，长按改的是它的盒面图（可逆、随时能再换）—— 卡它 3 秒没有道理。
+ */
+private const val COVER_MS = 900
+
 /** 只为在组合里持有一个可取消的动画句柄 —— 局部 `var` 会被手势闭包固化，不能用。 */
 private class AnimHandle {
     var job: Job? = null
@@ -81,10 +91,12 @@ private class AnimHandle {
  *  · 点中间的磁带 = 送进卡座（装带动画的起点就是它自己的矩形）
  *  · 点两侧露出的边 = 翻到相邻那盘
  *  · 点「＋」= **新增一盘**（扫本机音乐库，把同一张专辑 / 同一个目录的歌收成一盘，并自动翻到它）
- *  · **长按中间的磁带** = 抽掉这盘：先咬住 1s（这一秒松手仍算点击），过了这一秒才开始 3s 的
- *    删除计时（卡缘橙线走满、机身持续震动）；计时中途松手只等于**撤销**，绝不会被当成点击；
- *    走满则卡位下沉、缩小、淡出。卡座里那盘和库里仅剩的那盘删不动（会提示），
- *    其余（含内置 4 盘）都能删，且落盘不再回来。
+ *  · **长按中间的磁带** = 先咬住 1s（这一秒里松手仍算点击），过了这一秒按**这一格能不能删**分两路：
+ *     · 能删（用户自己弄进来的那些）→ 3s 删除计时：卡缘**橙**线走满、机身持续震动；
+ *       计时中途松手只等于**撤销**，绝不会被当成点击；走满则卡位下沉、缩小、淡出，落盘不再回来。
+ *     · 出厂那盘**空白带**（删不掉，库架永远留着它）→ 1s 换封面计时：卡缘**白**线走满，
+ *       弹出选图器换掉它的盒面图。
+ *    正在卡座里那盘无论如何都动不了（会提示先取出）。
  *
  * 为什么不用 `HorizontalPager`：视觉是**自己画的**（`Canvas`），pager 只负责手感，
  * 但它和点击层是兄弟节点，点击层在前面、`detectTapGestures` 一到 down 就 consume，
@@ -96,7 +108,7 @@ private class AnimHandle {
  */
 @Composable
 fun AlbumsPane(
-    machine: DuoMachine,
+    machine: FoldMachine,
     modifier: Modifier = Modifier,
 ) {
     BoxWithConstraints(modifier) {
@@ -152,22 +164,31 @@ fun AlbumsPane(
 
         // 删除的收尾：抽走动画与「后一盘顶上来」同时跑，最后靠状态机的 focusTick
         // 把页号 + 进度一次性对齐（见下面的 effect），所以这里不需要 then 回调。
-        fun fireRemove(i: Int) {
+        /**
+         * 长按走满之后落在哪儿 —— **看这一格能不能删**。
+         *
+         *  · 能删 → 抽走（这一栏唯一的破坏性动作，所以配 3 秒倒计时 + 持续震动）；
+         *  · 不能删但是出厂那盘**空白带** → 换盒面图（它永远留在库架上，长按就腾出来做这件事）；
+         *  · 其余（正在卡座里那盘）→ 借 [FoldMachine.removeTape] 吐一句提示就走。
+         */
+        fun fireHold(i: Int) {
             val id = machine.tapes.getOrNull(i)?.id ?: return
             holdFired.value = true
             armed.value = false
             holdIdx.intValue = -1
             holdP.floatValue = 0f
-            if (!machine.canRemove(id)) {
-                machine.removeTape(id)     // 删不动（在卡座里 / 只剩一盘）—— 借它吐一句提示就走
-                return
+            when {
+                machine.canRemove(id) -> {
+                    glide(
+                        if (i < machine.tapes.lastIndex) 1f else -1f,
+                        tween(REMOVE_MS, easing = FastOutSlowInEasing),
+                    )
+                    machine.removeTape(id)
+                }
+
+                machine.canRecolor(id) -> machine.requestCoverChange(id)
+                else -> machine.removeTape(id)   // 删不动 —— 借它吐一句提示
             }
-            // 删掉中间那格之后，右边那盘顶上来；删的是最后一盘则左边那盘滑过来
-            glide(
-                if (i < machine.tapes.lastIndex) 1f else -1f,
-                tween(REMOVE_MS, easing = FastOutSlowInEasing),
-            )
-            machine.removeTape(id)
         }
 
         LaunchedEffect(holdIdx.intValue) {
@@ -177,17 +198,35 @@ fun AlbumsPane(
                 return@LaunchedEffect
             }
             val i = holdIdx.intValue
-            if (machine.tapes.getOrNull(i) == null) return@LaunchedEffect
+            val held = machine.tapes.getOrNull(i) ?: return@LaunchedEffect
             holdP.floatValue = 0f
             // 第一关：按住不动 1 秒。这一秒里进度线不走，松手就是普通点击。
             delay(HOLD_ARM_MS.toLong())
             if (machine.tapes.getOrNull(i) == null) return@LaunchedEffect
             armed.value = true
-            machine.buzzDelete()           // 计时开始 → 一直嗡嗡响到松手或走满
-            animate(0f, 1f, animationSpec = tween(HOLD_MS, easing = LinearEasing)) { v, _ ->
+            // 第二关看落点：能删的走 3 秒删除计时（一直嗡嗡响，那是"还来得及"的提醒）；
+            // 空白带走 1 秒换封面 —— 换封面随时能再换，不需要那么长的反悔窗口。
+            val recolor = !machine.canRemove(held.id) && machine.canRecolor(held.id)
+            if (recolor) {
+                machine.buzzHold()
+            } else {
+                machine.buzzDelete()
+            }
+            animate(0f, 1f, animationSpec = tween(if (recolor) COVER_MS else HOLD_MS, easing = LinearEasing)) { v, _ ->
                 holdP.floatValue = v
             }
-            fireRemove(i)
+            fireHold(i)
+        }
+
+        // 长按空白带走满 → 挑一张图当它的盒面（选图结果由状态机拷进自己的目录）
+        val coverPicker = rememberLauncherForActivityResult(
+            ActivityResultContracts.GetContent()
+        ) { uri ->
+            val id = machine.claimCoverTapeId()
+            if (uri != null) machine.assignCover(id, uri) else machine.consumeCoverRequest()
+        }
+        LaunchedEffect(machine.coverAsk) {
+            if (machine.coverAsk > 0) coverPicker.launch("image/*")
         }
 
         LaunchedEffect(pageState.intValue) { machine.focusIndex(pageState.intValue) }
@@ -337,7 +376,7 @@ fun AlbumsPane(
                             val dy = pos.y - plusCy
                             if (dx * dx + dy * dy <= plusR * plusR * 1.7f) {
                                 // 「＋」：扫本机音乐库，把**同一张专辑/同一个目录**的歌收成一盘磁带
-                                // （没给过读取权限就先要权限，见 DuoManScreen）
+                                // （没给过读取权限就先要权限，见 FoldScreen）
                                 machine.requestImport()
                             } else {
                                 val cur = cardRectAt(0, frac.floatValue, u, pw, cy, tw, th)
@@ -376,7 +415,7 @@ private fun DrawScope.drawPlusButton(cx: Float, cy: Float, r: Float) {
 }
 
 private fun DrawScope.drawAlbums(
-    machine: DuoMachine,
+    machine: FoldMachine,
     page: Int,
     frac: Float,
     u: Float,
@@ -456,10 +495,15 @@ private fun DrawScope.drawAlbums(
         }
     }
 
-    // 长按进度线：按住中间那张卡时，橙线沿**卡边本身**从左上角起走满一圈 ——
-    // 这一栏一个字都没有，这就是"确认删除"的唯一提示。
+    // 长按进度线：按住中间那张卡时，线沿**卡边本身**从左上角起走满一圈 ——
+    // 这一栏一个字都没有，这就是"咬住了、还在计时"的唯一提示。
+    // 颜色顺带说明这次按住的落点：**橙** = 抽走这盘带（机身唯一的信号色）；
+    // **白** = 换它的盒面图（出厂那盘空白带，删不掉）。
     // 咬住那一秒（进度还是 0）先给一圈极淡的整轮廓：手别抬，抬了就是点击。
     if (holdIdx >= 0) {
+        val heldId = machine.tapes.getOrNull(holdIdx)?.id
+        val recolor = heldId != null && !machine.canRemove(heldId) && machine.canRecolor(heldId)
+        val ring = if (recolor) C.LibInk else C.Signal
         val r = cardRectAt(0, frac, u, pw, cy, tw, th).inflate(9f * u)
         val outline = Path().apply {
             addRoundRect(RoundRect(r, CornerRadius(10f * u)))
@@ -468,11 +512,11 @@ private fun DrawScope.drawAlbums(
             val measure = PathMeasure().apply { setPath(outline, false) }
             val drawn = Path()
             if (measure.getSegment(0f, measure.length * holdP.coerceIn(0f, 1f), drawn, true)) {
-                drawPath(drawn, C.Signal, style = Stroke(width = 3f * density, cap = StrokeCap.Round))
+                drawPath(drawn, ring, style = Stroke(width = 3f * density, cap = StrokeCap.Round))
             }
         } else {
             drawPath(
-                outline, C.Signal,
+                outline, ring,
                 alpha = 0.30f,
                 style = Stroke(width = 2f * density, cap = StrokeCap.Round),
             )

@@ -4,6 +4,9 @@
     <!-- 长按删除落定时的触感 -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <!-- 录音键 = 真的在录（MediaRecorder 收麦克风） -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <!-- 自动查找本机音乐（按专辑/目录收成一盘磁带）：
          Android 13+ 用细分权限，12 及以下退回读外部存储 -->
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
@@ -14,17 +17,18 @@
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:resizeableActivity="true"
         android:supportsRtl="false"
-        android:theme="@style/Theme.DuoMan">
+        android:theme="@style/Theme.TFold">
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:resizeableActivity="true"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboardHidden|uiMode"
-            android:theme="@style/Theme.DuoMan">
+            android:theme="@style/Theme.TFold">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

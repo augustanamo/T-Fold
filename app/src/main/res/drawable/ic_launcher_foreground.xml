@@ -1,28 +1,54 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  TFold 的图标前景：一盘磁带（横放，1.56 : 1 —— 和 App 里那盘带的真实比例一致）。
+
+  画布 108×108；自适应图标的安全区是**居中 66 的圆**（外圈约 18 会被面具裁掉），
+  带子本体收在 54×34，四角到圆心 31.9 < 33 —— 任何面具（圆 / 方 / 水滴）下都不会被切到。
+
+  三条信息，从远到近：
+    · 壳 —— 深炭色，沿中线分成两半（左半亮一档），远看就是"折叠"的那道折；
+    · 标签 —— 壳上部一条纸带（真磁带印曲目的地方），左端一枚橙块（App 的信号色）；
+    · 两轮 —— 近白的供 / 收带盘，中心打孔。
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+
+    <!-- 左半壳（折起来朝向光的那一半） -->
     <path
-        android:fillColor="#FFF1F0EC"
-        android:pathData="M0,0h108v108h-108z" />
+        android:fillColor="#FF41413A"
+        android:pathData="M27,40.5a3.5,3.5 0 0 1 3.5,-3.5L54,37L54,71L30.5,71a3.5,3.5 0 0 1 -3.5,-3.5z" />
+
+    <!-- 右半壳（背光那一半） -->
     <path
-        android:fillColor="#FF2A2A2A"
-        android:pathData="M39,30h30a4,4 0 0 1 4,4v40a4,4 0 0 1 -4,4h-30a4,4 0 0 1 -4,-4v-40a4,4 0 0 1 4,-4z" />
+        android:fillColor="#FF232320"
+        android:pathData="M54,37L77.5,37a3.5,3.5 0 0 1 3.5,3.5L81,67.5a3.5,3.5 0 0 1 -3.5,3.5L54,71z" />
+
+    <!-- 纸标签带 -->
     <path
-        android:fillColor="#FF3A2F26"
-        android:pathData="M54,43m-9,0a9,9 0 1,0 18,0a9,9 0 1,0 -18,0" />
-    <path
-        android:fillColor="#FFCFCDC6"
-        android:pathData="M54,43m-4,0a4,4 0 1,0 8,0a4,4 0 1,0 -8,0" />
-    <path
-        android:fillColor="#FFCFCDC6"
-        android:pathData="M54,63m-4,0a4,4 0 1,0 8,0a4,4 0 1,0 -8,0" />
-    <path
-        android:fillColor="#FFEFEDE6"
-        android:pathData="M42,68h24v4h-24z" />
+        android:fillColor="#FFE3E1D9"
+        android:pathData="M31,40.5h46v6.5h-46z" />
+
+    <!-- 左端墨块（信号橙） -->
     <path
         android:fillColor="#FFCE4A1E"
-        android:pathData="M30,80h48v3h-48z" />
+        android:pathData="M31,40.5h6.5v6.5h-6.5z" />
+
+    <!-- 供带盘 -->
+    <path
+        android:fillColor="#FFEDECE6"
+        android:pathData="M36.6,59.5a7.4,7.4 0 1 0 14.8,0a7.4,7.4 0 1 0 -14.8,0" />
+    <path
+        android:fillColor="#FF232320"
+        android:pathData="M41.3,59.5a2.7,2.7 0 1 0 5.4,0a2.7,2.7 0 1 0 -5.4,0" />
+
+    <!-- 收带盘 -->
+    <path
+        android:fillColor="#FFEDECE6"
+        android:pathData="M56.6,59.5a7.4,7.4 0 1 0 14.8,0a7.4,7.4 0 1 0 -14.8,0" />
+    <path
+        android:fillColor="#FF232320"
+        android:pathData="M61.3,59.5a2.7,2.7 0 1 0 5.4,0a2.7,2.7 0 1 0 -5.4,0" />
 </vector>

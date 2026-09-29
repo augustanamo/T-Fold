@@ -29,7 +29,7 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Dp
-import com.augustana.tfold.machine.DuoMachine
+import com.augustana.tfold.machine.FoldMachine
 import com.augustana.tfold.model.Tape
 import com.augustana.tfold.ui.parts.CASSETTE_IN_BOX
 import com.augustana.tfold.ui.parts.CASSETTE_IN_BOX_X
@@ -52,7 +52,7 @@ import kotlin.math.sin
  *  · 普通手机竖屏 → 播放器；普通手机横屏 → 选带/装带。同一份布局，处处成立。
  */
 @Composable
-fun DuoManScreen(machine: DuoMachine) {
+fun FoldScreen(machine: FoldMachine) {
     val tm = rememberTextMeasurer()
     val density = LocalDensity.current.density
 
@@ -95,12 +95,12 @@ fun DuoManScreen(machine: DuoMachine) {
         val picker = rememberLauncherForActivityResult(
             ActivityResultContracts.OpenDocument()
         ) { uri ->
-            // 注意：这台 Fold 上选曲期间 DuoMan 会被压到后台，进程随时可能被回收。
+            // 注意：这台 Fold 上选曲期间 TFold 会被压到后台，进程随时可能被回收。
             // 重启后系统仍会把 uri 补投回来，但内存里的「给谁选的」没了 ——
             // claimPickedTapeId() 会从盘上把 id 捡回来，绝不静默丢歌。
             if (uri != null) {
                 val id = machine.claimPickedTapeId()
-                android.util.Log.i("DuoMan", "picker result uri=$uri -> id=$id")
+                android.util.Log.i("TFold", "picker result uri=$uri -> id=$id")
                 machine.assignAudio(id, uri)
             } else {
                 machine.consumeAudioRequest()
@@ -125,6 +125,17 @@ fun DuoManScreen(machine: DuoMachine) {
                     else android.Manifest.permission.READ_EXTERNAL_STORAGE
                 )
             }
+        }
+
+        // 麦克风权限：按 REC 那一刻才要，拿到就把那一下录音做完
+        val mic = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            if (granted) machine.onRecPermissionGranted()
+            else machine.hint("没有麦克风权限 · 录不了")
+        }
+        LaunchedEffect(machine.recAsk) {
+            if (machine.recAsk > 0) mic.launch(android.Manifest.permission.RECORD_AUDIO)
         }
 
         // 底色：防一帧闪白
@@ -186,7 +197,7 @@ private fun DrawScope.drawSeam(leafW: Float) {
  * 所以"合 → 开 → 带子滑出"是一条连续的线。
  */
 @Composable
-private fun FlightLayer(machine: DuoMachine, density: Float) {
+private fun FlightLayer(machine: FoldMachine, density: Float) {
     val src = machine.cardRect ?: return
     val dst = machine.slotRect ?: return
 

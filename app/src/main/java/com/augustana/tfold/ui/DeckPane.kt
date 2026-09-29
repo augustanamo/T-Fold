@@ -25,7 +25,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
-import com.augustana.tfold.machine.DuoMachine
+import com.augustana.tfold.machine.FoldMachine
 import com.augustana.tfold.ui.parts.CASSETTE_H_RATIO
 import com.augustana.tfold.ui.parts.drawCassette
 import com.augustana.tfold.ui.parts.hairPx
@@ -47,7 +47,7 @@ import kotlin.math.sin
  */
 @Composable
 fun DeckPane(
-    machine: DuoMachine,
+    machine: FoldMachine,
     modifier: Modifier = Modifier,
 ) {
     BoxWithConstraints(modifier) {
@@ -230,7 +230,7 @@ private fun DrawScope.reelTable(cx: Float, cy: Float, r: Float) {
  * 但 hairPx()/density 的线宽不能乘 —— 所以坐标逐个乘 u，线宽保持绝对值。
  */
 private fun DrawScope.drawDeck(
-    machine: DuoMachine,
+    machine: FoldMachine,
     u: Float,
     weave: Brush,
     doorL: Float,

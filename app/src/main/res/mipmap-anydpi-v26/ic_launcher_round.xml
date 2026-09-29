@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 圆形面具版本：与 ic_launcher 同一套前景/底色，只是清单里多指一个 roundIcon，
+     让用"圆形图标"的桌面（部分三星 One UI 主题）拿到的也是同一枚图标。 -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
+</adaptive-icon>

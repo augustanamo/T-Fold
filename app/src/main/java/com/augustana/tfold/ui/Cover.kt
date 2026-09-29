@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.font.FontWeight
+import com.augustana.tfold.model.BLANK_TAPE_ID
 import com.augustana.tfold.model.CoverStyle
 import com.augustana.tfold.model.Tape
 import com.augustana.tfold.ui.parts.Align
@@ -122,15 +123,15 @@ fun DrawScope.drawCover(
 /**
  * J 卡（盒面）—— 照独立厂牌磁带的版式语言做（参考实拍：NMR / UMBOR 那一类）。
  *
- *  ① **图**：有内嵌封面就**整张放进去、不裁**（contain）；没有就把构成法的图案印在白纸上。
+ *  ① **图**：有内嵌封面（或用户给空白带挑的那张）就**铺满**图片区（cover），
+ *     没有就把构成法的图案印在白纸上 —— 出厂那盘空白带走的就是后一条：一张干净的空白 J 卡。
  *  ② **文字**：全部排在封面**之外**那条纸带上，一个字都不压到图上 ——
  *     艺术家（大写宽字距）+ 专辑名（中号，超长裁省略号）
- *     + 右侧规格（`TYPE I · 9 MIN`、轨数）+ 右下角一枚墨色块。
+ *     + 右侧规格（`TYPE I · BLANK`、轨数）+ 右下角一枚墨色块。
  *
  * 两条都是"踩过才知道"的：
- *  · 原来图是铺满（cover 裁切）—— 很多封面自己就把专辑名印在图上，一裁就切掉半行；
- *  · 原来左上角还贴一枚带子 id 的目录号小签 —— 它跟封面抢位置，用户要的是干净封面。
- * 判断"封面里有没有字"做不可靠（要 OCR），但不需要判断：整张展示对两种封面都安全。
+ *  · 图从 contain 改回 cover：contain 在 1:1.32 的竖幅 J 卡上等于上下两条大留白，图缩成一小块；
+ *  · 左上角那枚带子 id 的目录号小签已删除 —— 它跟封面抢位置，用户要的是干净封面。
  */
 private fun DrawScope.drawJCard(
     tape: Tape,
@@ -158,16 +159,15 @@ private fun DrawScope.drawJCard(
     val stripH = h * 0.150f          // 文字带
     val imgH = h - stripH
 
-    // ---- ① 图：**整张放进图片区，一个像素都不裁**
+    // ---- ① 图：**铺满图片区**（cover：短边贴边，多出来的裁掉）
     //
-    // 之前是"铺满"（cover 裁切）—— 看着满，但很多专辑封面自己就把专辑名/艺人印在图上，
-    // 有的干脆是一整张海报：铺满会把那行字横着切掉半边，封面越"满"越糟。
-    // 判断"这张图里有没有文字"做不可靠（要 OCR/模型），但**不需要判断**：
-    // 整张展示对两种封面都安全 —— 有字的一个字不少，没字的也只是四周留出纸边
-    // （真磁带的 J 卡本来就是"纸 + 印上去的图"）。代价只是留白，切掉的却是内容。
+    // 中间试过一版"整张放进去、不裁"（contain）：理由是很多封面自己印着专辑名，
+    // 铺满会切掉半行。但盒面是 1:1.32 的竖幅、专辑封面大多是方的 —— 一 contain
+    // 就是上下两条大留白，封面缩成中间一小块，"满"的观感全没了。
+    // 用户看下来要的还是铺满：图就是这一张，边界交给纸带（文字在封面之外，见 ②）。
     if (art != null) {
         clipRect(x, y, x + w, y + imgH) {
-            val s = minOf(w / art.width, imgH / art.height)   // contain：长边贴边，短边留纸
+            val s = maxOf(w / art.width, imgH / art.height)   // cover：短边铺满，多出来的裁掉
             val dw = art.width * s
             val dh = art.height * s
             drawImage(
@@ -238,6 +238,24 @@ private fun DrawScope.drawJCard(
 private fun DrawScope.paperArt(tape: Tape, x: Float, y: Float, w: Float, h: Float, alpha: Float) {
     val ink = tape.art.getOrElse(1) { Color(0xFF2F4A3C) }
     val soft = Color(0x339A9890)
+
+    // 出厂那盘空白带：**不印任何图案** —— 它就是一张还没写过的 J 卡。
+    // 几道格线（真空白带上留给你手写标题的那几行）+ 左上角两枚规格色标。
+    // 别的带子即使抽不到封面也有构成法兜底，只有这一盘该是"空白"的。
+    if (tape.id == BLANK_TAPE_ID) {
+        val rule = Color(0x2E9A9890)
+        for (i in 1..4) {
+            val ly = y + h * (0.14f + i * 0.175f)
+            hair(x + w * 0.015f, ly, x + w * 0.985f, ly, rule, alpha = alpha)
+        }
+        drawRect(ink, Offset(x + w * 0.015f, y + h * 0.048f), Size(w * 0.26f, h * 0.018f), alpha = alpha)
+        drawRect(
+            ink, Offset(x + w * 0.015f, y + h * 0.078f), Size(w * 0.13f, h * 0.018f),
+            alpha = alpha * 0.45f,
+        )
+        return
+    }
+
     when (tape.style) {
         CoverStyle.HORIZON -> {
             drawCircle(ink, w * 0.30f, Offset(x + w * 0.50f, y + h * 0.40f), alpha = alpha)

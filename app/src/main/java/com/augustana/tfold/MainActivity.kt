@@ -54,18 +54,18 @@ import androidx.window.area.WindowAreaSessionPresenter
 import androidx.window.layout.FoldingFeature
 import androidx.window.layout.WindowInfoTracker
 import com.augustana.tfold.audio.AudioEngine
-import com.augustana.tfold.machine.DuoMachine
-import com.augustana.tfold.ui.DuoManScreen
+import com.augustana.tfold.machine.FoldMachine
+import com.augustana.tfold.ui.FoldScreen
 import com.augustana.tfold.ui.FoldedFace
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-private const val TAG = "DuoMan"
+private const val TAG = "TFold"
 
 class MainActivity : ComponentActivity() {
 
-    private var machine: DuoMachine? = null
+    private var machine: FoldMachine? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -83,9 +83,9 @@ class MainActivity : ComponentActivity() {
             // 作用域必须来自 composition —— 只有它的 CoroutineContext 带 MonotonicFrameClock，
             // 状态机里的 Animatable.animateTo（装带、退带）才跑得起来。
             val scope = rememberCoroutineScope()
-            val m = remember { DuoMachine(applicationContext, audio, scope).also { machine = it } }
+            val m = remember { FoldMachine(applicationContext, audio, scope).also { machine = it } }
             MachineTicker(m)
-            DuoManScreen(m)
+            FoldScreen(m)
         }
 
         observeFoldState()
@@ -154,7 +154,7 @@ class MainActivity : ComponentActivity() {
      * 所以这里必须手动做三件事，否则表现就是「合上再展开，内屏上还停在播放面」：
      *  1. 重新钉方向 —— 新面板的原生形状可能不一样；
      *  2. 重新订阅折叠特征 —— 旧订阅绑在旧窗口上，不会再发新值，
-     *     而 `DuoManScreen` 在竖幅窗口上会去问 `foldState`，僵值直接导致画面错。
+     *     而 `FoldScreen` 在竖幅窗口上会去问 `foldState`，僵值直接导致画面错。
      * 外屏呈现那条 flow 是全局的（不绑窗口），不需要在这里重订。
      */
     private fun onDisplaySwitch() {
@@ -345,7 +345,7 @@ class MainActivity : ComponentActivity() {
  * 外屏呈现会话活跃时这里让位（帧驱动换到 CoverFace 的循环），避免双重积分。
  */
 @Composable
-private fun MachineTicker(machine: DuoMachine) {
+private fun MachineTicker(machine: FoldMachine) {
     LaunchedEffect(machine) {
         var last = 0L
         while (isActive) {
@@ -367,7 +367,7 @@ private fun MachineTicker(machine: DuoMachine) {
  * 这时按外屏竖向比例（1248/1972）把画面信箱式居中，绝不横向拉伸。
  */
 @Composable
-private fun CoverFace(machine: DuoMachine) {
+private fun CoverFace(machine: FoldMachine) {
     val tm = rememberTextMeasurer()
     val density = LocalDensity.current.density
     LaunchedEffect(machine) {
@@ -411,7 +411,7 @@ private const val VOLUME_SKIP_REPEAT_MS = 450L
  * 全部吃掉 ACTION_DOWN 是必须的：只要放一个给系统，系统就会在按住期间连续调音量 ——
  * 长按换带的同时音量会被一路拧到底。
  */
-private class VolumeKeyHandler(private val machine: () -> DuoMachine?) {
+private class VolumeKeyHandler(private val machine: () -> FoldMachine?) {
 
     private var lastSkipAt = 0L
     private var longFired = false

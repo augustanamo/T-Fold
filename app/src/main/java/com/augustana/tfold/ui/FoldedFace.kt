@@ -26,7 +26,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextMeasurer
-import com.augustana.tfold.machine.DuoMachine
+import com.augustana.tfold.machine.FoldMachine
 import com.augustana.tfold.machine.Transport
 import com.augustana.tfold.ui.parts.CASSETTE_H_RATIO
 import com.augustana.tfold.ui.parts.KeyKind
@@ -56,7 +56,7 @@ import kotlin.math.sin
  */
 @Composable
 fun FoldedFace(
-    machine: DuoMachine,
+    machine: FoldMachine,
     tm: TextMeasurer,
     modifier: Modifier = Modifier,
 ) {
@@ -210,7 +210,7 @@ class FoldMetric(val w: Float, val h: Float) {
 // ---------------------------------------------------------------- 绘制
 
 private fun DrawScope.drawFoldedFace(
-    machine: DuoMachine,
+    machine: FoldMachine,
     tm: TextMeasurer,
     w: Float,
     h: Float,
@@ -283,10 +283,13 @@ private fun DrawScope.drawFoldedFace(
         KeyKind.REC,
         KeyKind.EJECT,
     )
+    // 录音时那颗红点**一闪一闪** —— 真录音机也是这么告诉你的，不闪烁就没人知道还在录。
+    // 时序借 `machine.frame`（每帧 +1）：60fps 下 30 帧 ≈ 半秒亮、半秒暗。
+    val recBlink = machine.recording && (machine.frame / 30L) % 2L == 0L
     for (i in 0..4) {
         val r = m.keyRect(i)
         drawKey(
-            r.left, r.top, r.width, r.height, kinds[i], pressed == i,
+            r.left, r.top, r.width, r.height, kinds[i], pressed == i || (i == 3 && recBlink),
             engaged && stripIndexOf(machine.indicatorAt) == i,
         )
     }

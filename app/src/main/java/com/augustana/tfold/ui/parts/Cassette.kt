@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
+import com.augustana.tfold.model.BLANK_TAPE_ID
 import com.augustana.tfold.model.Tape
 import com.augustana.tfold.ui.C
 import com.augustana.tfold.ui.mix
@@ -47,7 +48,7 @@ const val HUB_V_BOT = 0.712f
 /**
  * 磁带**躺在包装盒里**的静止位：尺寸相对盒宽、中心相对盒宽。
  *
- * 飞行体（DuoManScreen）与盒腔模位（Cover）都以它为基准：
+ * 飞行体（FoldScreen）与盒腔模位（Cover）都以它为基准：
  *  · 尺寸取 0.88 —— 盒与带同为 1.56 宽高比，0.88 时上下、左右各留约 6% 盒壳壁，
  *    正好是"一盘带塞在它的盒里"那种贴合感（0.76 太松，看着像盒里放了个小人）；
  *  · 中心取 0.525 —— 盒腔模位偏到盖板**自由边之外**那一侧：盖板开到底只压住
@@ -63,8 +64,18 @@ private fun chromaticOf(c: Color): Float =
     maxOf(c.red, c.green, c.blue) - minOf(c.red, c.green, c.blue)
 
 /**
+ * **无色壳** —— 出厂那盘空白带的壳。
+ *
+ * 它没有任何封面可染，配色也是纸白/石墨/灰（彩度 0）。要是照常走"按 id 定一个色相"，
+ * 就会凭 `b01` 的哈希白捡一个颜色出来 —— 一盘"空白磁带"带着个莫名其妙的蓝壳或紫壳。
+ * 空白带就该是**最素的那一盘**：白透塑料，不参与配色这件事。
+ */
+val NeutralShell = Color(0xFFEDEFEE)
+
+/**
  * 透明壳的**色**从哪来 —— 默认是清壳带，你看到的色是封面透过塑料染上来的：
- *  · 有封面图 → 用封面主色（`DuoMachine` 在 IO 里抽好传进来）；
+ *  · 空白带（出厂那盘）→ [NeutralShell]，不上色；
+ *  · 有封面图 → 用封面主色（`FoldMachine` 在 IO 里抽好传进来）；
  *  · 没有 → 取盒面配色里最有颜色的那一档（构成法那几盘）；
  *  · 连配色都是灰的 → 按带子 id 定一个色相（同一盘永远同色，不同带子颜色不同）。
  *
@@ -72,6 +83,7 @@ private fun chromaticOf(c: Color): Float =
  * 这样壳里的零件、印刷记号、金属件都还读得出来，不会糊成一块彩色塑料。
  */
 fun shellTintOf(tape: Tape, coverTint: Color? = null): Color {
+    if (tape.id == BLANK_TAPE_ID) return NeutralShell
     val base = coverTint?.takeIf { chromaticOf(it) > 0.10f }
         ?: tape.art.maxByOrNull { chromaticOf(it) }?.takeIf { chromaticOf(it) >= 0.22f }
     var hue: Float
@@ -92,10 +104,16 @@ fun shellTintOf(tape: Tape, coverTint: Color? = null): Color {
     return Color.hsv(hue.coerceIn(0f, 359.9f), sat.coerceIn(0.22f, 0.55f), 0.96f)
 }
 
-/** 壳里那盏灯：同色相但更浓更亮 —— 光穿过塑料比塑料本身更"有色"。 */
+/**
+ * 壳里那盏灯：同色相但更浓更亮 —— 光穿过塑料比塑料本身更"有色"。
+ *
+ * 无色壳（[NeutralShell]）例外：它没有色相可浓，硬按 1.55× 拉饱和会把那点通道误差
+ * 放大成一层粉/青的偏色，所以这里直接给一盏冷白透光。
+ */
 fun glowOf(tint: Color): Color {
     val hsv = FloatArray(3)
     android.graphics.Color.colorToHSV(tint.toArgb(), hsv)
+    if (hsv[1] < 0.06f) return Color(0xFFF4F6F6)
     return Color.hsv(hsv[0], (hsv[1] * 1.55f).coerceIn(0.30f, 0.92f), 1f)
 }
 
@@ -147,7 +165,7 @@ private fun rrPath(x: Float, y: Float, w: Float, h: Float, r: Float): Path =
     Path().apply { addRoundRect(androidx.compose.ui.geometry.RoundRect(x, y, x + w, y + h, r, r)) }
 
 /**
- * 画一盘竖放的磁带：供带盘在上、收带盘在下（与 Duo-Man 卡座一致）。
+ * 画一盘竖放的磁带：供带盘在上、收带盘在下（与 TFold 卡座一致）。
  *
  * [tapePos] 0 = 磁带全在供带盘，1 = 全绕到收带盘。
  * 两个轮毂的转角 [angleTop] / [angleBot] 由状态机按 1/半径 分别积分给出 ——

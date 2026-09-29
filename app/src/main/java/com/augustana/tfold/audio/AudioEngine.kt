@@ -144,10 +144,10 @@ class AudioEngine(context: Context) {
             ready = true
             currentUri = uri.toString()
             if (play) mp.start()
-            Log.i("DuoMan", "track ${i + 1}/${uris.size} @${offsetMs}ms play=$play dur=$durationMs")
+            Log.i("TFold", "track ${i + 1}/${uris.size} @${offsetMs}ms play=$play dur=$durationMs")
             true
         } catch (e: Exception) {
-            Log.w("DuoMan", "attach failed: ${e.message}")
+            Log.w("TFold", "attach failed: ${e.message}")
             durationMs = 0
             ready = false
             currentUri = null

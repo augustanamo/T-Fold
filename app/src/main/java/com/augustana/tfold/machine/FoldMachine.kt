@@ -7,10 +7,13 @@ import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.database.Cursor
 import android.graphics.BitmapFactory
+import android.graphics.Bitmap
 import android.media.AudioManager
 import android.media.MediaMetadataRetriever
+import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -29,11 +32,13 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
 import com.augustana.tfold.audio.AudioEngine
+import com.augustana.tfold.model.BLANK_TAPE_ID
+import com.augustana.tfold.model.BuiltinTapes
 import com.augustana.tfold.model.CoverStyle
 import com.augustana.tfold.model.Tape
-import com.augustana.tfold.model.TapeLibrary
 import com.augustana.tfold.model.UserTapePalettes
 import com.augustana.tfold.model.UserTapeStyles
+import com.augustana.tfold.model.isBuiltinTape
 import com.augustana.tfold.ui.mix
 import com.augustana.tfold.ui.parts.shellTintOf
 import kotlinx.coroutines.CoroutineScope
@@ -42,12 +47,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import kotlin.math.PI
 import kotlin.math.roundToInt
 
 enum class Transport { STOP, PLAY, PAUSE, FF, REW, REC }
 
-private const val TAG = "DuoMan"
+private const val TAG = "TFold"
 
 /** 读本机音乐库要的权限：13 起是细分的 READ_MEDIA_AUDIO，12 及以下退回读外部存储。 */
 private val AUDIO_PERMISSION: String =
@@ -67,7 +73,7 @@ private const val WIND_RATE = 18f     // 快进/快退倍速（相对走带）
 private const val VOLUME_CAP = 0.80f
 
 /**
- * Duo-Man 状态机。
+ * TFold 状态机。
  *
  * 对外只暴露状态与动作，动画与物理跑在 composition 提供的作用域里：
  *  - opened : 内屏（横屏）= true 露出磁带库/卡座；外屏（竖屏）= false 是正面播放器
@@ -75,7 +81,7 @@ private const val VOLUME_CAP = 0.80f
  *
  * 这台机器的开合就是设备本身的开合 —— 这里不做任何"假装折叠"的动画。
  */
-class DuoMachine(
+class FoldMachine(
     context: Context,
     val audio: AudioEngine,
     /**
@@ -90,17 +96,20 @@ class DuoMachine(
     private val scope: CoroutineScope,
 ) {
     /**
-     * 磁带库 = 4 盘内置（`TapeLibrary`）+ 用户用右上角「＋」新加的。
-     * 新加的一律**追加在末尾**，顺序就是加入顺序。
+     * 磁带库 = **一盘出厂空白带**（`BuiltinTapes`）+ 用户自己弄进来的（「＋」扫本机音乐 / 手动选曲 /
+     * 直接对着空白带录）。用户加的**追加在末尾**，顺序就是加入顺序。
+     *
+     * 出厂不再摆一排假磁带（曾经有 4 盘编好的，放不出声）—— 新装的库架上是**一盘真的空白带**：
+     * 能录、能回放、封面由用户定，而且删不掉（库架因此永远不会空）。
      */
-    var tapes by mutableStateOf(TapeLibrary)
+    var tapes by mutableStateOf(BuiltinTapes)
         private set
 
     /** 请求左栏翻到 [index]：自增一次即触发。左栏自己翻页不会碰它，避免来回打架。 */
     var focusTick by mutableStateOf(0)
         private set
     private val app: Context = context.applicationContext
-    private val prefs: SharedPreferences = app.getSharedPreferences("duoman", Context.MODE_PRIVATE)
+    private val prefs: SharedPreferences = app.getSharedPreferences("tfold", Context.MODE_PRIVATE)
     private val audioManager = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
     /** 一张专辑/一个目录收成一盘带的登记表 —— 导入是幂等的，不会重复吃进同一张专辑。 */
@@ -198,7 +207,6 @@ class DuoMachine(
 
     /** 这盘带清壳的色：有封面主色用它，否则退回盒面配色 / 带子 id（见 [shellTintOf]）。 */
     fun tintFor(tape: Tape): Color = shellTintOf(tape, coverTint[tape.id])
-
     /** 磁带库中「当前卡位」在根坐标系里的矩形，用于飞行起点。 */
     var cardRect by mutableStateOf<Rect?>(null)
 
@@ -209,6 +217,35 @@ class DuoMachine(
     /** 正在扫描本机音乐库（导入专辑）—— UI 可以据此显示一个转动的指示。 */
     var importing by mutableStateOf(false)
         private set
+
+    // ------------------------------------------------------------------ 录音
+
+    /**
+     * 「⚫ REC」被按下但还没有麦克风权限 —— 自增一次，UI 收到就去要权限，拿到再自动重按。
+     */
+    var recAsk by mutableStateOf(0)
+        private set
+
+    /** 抹音头正压着、麦克风正在录。UI 用它点亮那颗红点。 */
+    var recording by mutableStateOf(false)
+        private set
+
+    /** 正在录音的那盘带（停止时要把这一段挂到它身上）。 */
+    private var recTapeId: String? = null
+
+    /** 录音机与它的落盘文件；null = 没在录。 */
+    private var recorder: MediaRecorder? = null
+    private var recFile: File? = null
+    private var recStartAt = 0L
+
+    // ------------------------------------------------------------------ 换盒面
+
+    /** 「长按换封面」的选图器请求：自增一次即触发（真的换封面的是 `assignCover`）。 */
+    var coverAsk by mutableStateOf(0)
+        private set
+
+    /** 这次选图是给哪盘带选的；null = 没有在选。 */
+    private var coverPickId: String? = null
 
     /** 卡座落座点在根坐标系里的矩形，用于飞行终点。 */
     var slotRect by mutableStateOf<Rect?>(null)
@@ -267,10 +304,13 @@ class DuoMachine(
     private var flightJob: Job? = null
 
     init {
+        migrateLegacyPrefs()
+
         // 先把用户新加的磁带接回库尾，再统一恢复各盘的曲目绑定。
-        // 被长按删掉的盘（含内置那 4 盘）记在 removed 名单里 —— 每次启动都要把它们滤掉。
+        // 被长按删掉的带子记在 removed 名单里 —— 每次启动都要把它们滤掉。
+        // （`removed` 里还留着一批老版本内置带的 id，无害：那些 id 现在既不在库也不在盘上。）
         removed = prefs.getStringSet("removed", emptySet())?.toMutableSet() ?: mutableSetOf()
-        tapes = (TapeLibrary + restoreUserTapes()).filterNot { it.id in removed }
+        tapes = (BuiltinTapes + restoreUserTapes()).filterNot { it.id in removed }
 
         // 进程被系统杀掉重启后，选曲请求还在半路上（pick 结果由系统补投回重建的 Activity）：
         // 把占好的 id 从盘上捡回来，回调里才认得这是哪盘带。
@@ -280,6 +320,11 @@ class DuoMachine(
         tapes.forEach { t -> prefs.getString("uri_${t.id}", null)?.let { restored[t.id] = it } }
         assigned = restored
         restored.forEach { (id, uri) -> loadCoverArt(id, uri) }
+
+        // 用户给某盘带换过的盒面图（拷进 filesDir/covers 里，不依赖任何 uri 授权）
+        tapes.forEach { t ->
+            prefs.getString("cover_${t.id}", null)?.let { path -> loadCoverFile(t.id, path) }
+        }
 
         // 搬屏（startActivity + finish）会重建 Activity —— 装带状态必须落盘恢复
         prefs.getString("loaded", null)?.let { id -> tapes.firstOrNull { it.id == id } }?.let { loadedId = it.id }
@@ -293,6 +338,33 @@ class DuoMachine(
                 .coerceIn(0f, 1f)
             lastVolumeStep = (volume * cap).roundToInt()
         }
+    }
+
+    /**
+     * 老版本的落盘文件叫 `duoman`（那时应用还叫 Duo-Man）。改名之后如果直接换文件名，
+     * 用户的磁带库、导入记录、已换封面、装带状态**全部读不到** —— 在用户看来就是"我的东西没了"。
+     *
+     * 所以这里做一次性搬迁：新文件还空着时，把老文件整个倒过来，并写下标记，
+     * 之后每次启动都跳过（不覆盖用户在"新名字"下产生的新数据）。
+     */
+    private fun migrateLegacyPrefs() {
+        if (prefs.getBoolean("migratedFromDuoman", false)) return
+        if (prefs.all.isNotEmpty()) return              // 新文件已经有数据 → 不搬，免得反向覆盖
+        val old = runCatching { app.getSharedPreferences("duoman", Context.MODE_PRIVATE) }.getOrNull()
+        val all = old?.all ?: return
+        if (all.isEmpty()) return
+        val e = prefs.edit()
+        all.forEach { (k, v) ->
+            when (v) {
+                is String -> e.putString(k, v)
+                is Int -> e.putInt(k, v)
+                is Long -> e.putLong(k, v)
+                is Float -> e.putFloat(k, v)
+                is Boolean -> e.putBoolean(k, v)
+                is Set<*> -> e.putStringSet(k, v.filterIsInstance<String>().toSet())
+            }
+        }
+        e.putBoolean("migratedFromDuoman", true).apply()
     }
 
     /** 装带状态落盘：搬屏重建 Activity 后恢复「哪盘带在卡座里、走到哪」。 */
@@ -349,6 +421,8 @@ class DuoMachine(
      * 传进来的可以是**整盘曲目串**：取第一首的封面当这盘带的盒面。
      */
     private fun loadCoverArt(tapeId: String, uriString: String) {
+        // 用户给这盘换过封面图 → 内嵌封面让位（用户挑的那张说了算）
+        if (prefs.getString("cover_$tapeId", null) != null) return
         val first = uriString.split('\n').firstOrNull()?.trim().orEmpty()
         val uriPart = first.substringBeforeLast('|', first)
         if (uriPart.isBlank()) return
@@ -371,6 +445,67 @@ class DuoMachine(
                 pair.second?.let { coverTint = coverTint + (tapeId to it) }
             }
         }
+    }
+
+    /** 落盘的那张封面图（`filesDir/covers/<id>.jpg`）—— 从**文件**读，不依赖任何 uri 授权。 */
+    private fun loadCoverFile(tapeId: String, path: String) {
+        scope.launch {
+            val pair = withContext(Dispatchers.IO) {
+                runCatching {
+                    BitmapFactory.decodeFile(path)?.let { bmp ->
+                        val image = bmp.asImageBitmap()
+                        image to dominantColorOf(image)
+                    }
+                }.getOrNull()
+            } ?: return@launch
+            coverArt = coverArt + (tapeId to pair.first)
+            pair.second?.let { coverTint = coverTint + (tapeId to it) }
+        }
+    }
+
+    /**
+     * 长按空白带 → 挑一张图当它的盒面。
+     *
+     * 图**拷进应用自己目录**再落盘（`filesDir/covers/<id>.jpg`）：
+     * 选图器给的是临时读权限，记个 uri 下次启动就失效了；拷一份下来才真的"记住"。
+     * 顺带缩到长边 ~1024 再存 —— 一张 12MP 的照片当盒面，内存和 IO 都不值得。
+     */
+    fun assignCover(tapeId: String?, uri: Uri) {
+        consumeCoverRequest()
+        if (tapeId == null || tapes.none { it.id == tapeId }) return
+        scope.launch {
+            val saved = withContext(Dispatchers.IO) {
+                runCatching {
+                    val bmp = decodeDownscaled(uri, 1024) ?: return@runCatching null
+                    val dir = File(app.filesDir, "covers").apply { mkdirs() }
+                    val out = File(dir, "$tapeId.jpg")
+                    out.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+                    bmp to out
+                }.getOrNull()
+            }
+            if (saved == null) {
+                hint("这张图读不出来")
+                return@launch
+            }
+            val image = saved.first.asImageBitmap()
+            coverArt = coverArt + (tapeId to image)
+            // 壳色也跟着新封面走：换一张红封面的图，这盘带的壳就该变红
+            val dominant = dominantColorOf(image)
+            coverTint = if (dominant != null) coverTint + (tapeId to dominant) else coverTint - tapeId
+            prefs.edit().putString("cover_$tapeId", saved.second.absolutePath).apply()
+            hint("已换封面")
+        }
+    }
+
+    /** 按长边上限采样解码 —— 先只读尺寸，再按 2 的幂次降采样，避免把整张原图读进内存。 */
+    private fun decodeDownscaled(uri: Uri, maxSide: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        app.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var s = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (s * 2) >= maxSide) s *= 2
+        val opts = BitmapFactory.Options().apply { inSampleSize = s }
+        return app.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
     }
 
     /**
@@ -509,10 +644,32 @@ class DuoMachine(
 
     /**
      * 这盘带能不能删。长按的 UI 先问一声再起动画 —— 免得"进度环都填满了才被告知删不掉"。
-     * 闸门同 [removeTape]。
+     * 闸门同 [removeTape]，外加**出厂那盘空白带走的是"换封面"不是"删除"**。
      */
     fun canRemove(id: String): Boolean =
-        !busy && id != loadedId && tapes.size > 1 && tapes.any { it.id == id }
+        !busy && !isBuiltinTape(id) && id != loadedId && tapes.size > 1 && tapes.any { it.id == id }
+
+    /**
+     * 这盘带长按能不能**换盒面图**。
+     *
+     * 只有出厂那盘空白带走这条路：它删不掉（库里永远留一盘），所以长按腾出来做"换封面"——
+     * 空白带的封面本来就该是用户挑的那张。别的带子长按仍然是删除（删除是它们唯一的命运）。
+     */
+    fun canRecolor(id: String): Boolean = !busy && id == BLANK_TAPE_ID && tapes.any { it.id == id }
+
+    /** 长按空白带落定 → 去挑一张图当它的盒面（UI 收到 [coverAsk] 就开选图器）。 */
+    fun requestCoverChange(id: String) {
+        if (!canRecolor(id)) return
+        coverPickId = id
+        coverAsk++
+    }
+
+    /** 选图器回来时问「这是给哪盘挑的」。进程被杀重启后内存里没了就返回 null（这次算了）。 */
+    fun claimCoverTapeId(): String? = coverPickId
+
+    fun consumeCoverRequest() {
+        coverPickId = null
+    }
 
     /**
      * 长按卡位 = 把这盘带从库架上抽走（含内置那 4 盘，删了就不再出现）。
@@ -551,13 +708,16 @@ class DuoMachine(
             val next = tapes.filterNot { t -> t.id == id }
             tapes = next
 
-            // 落盘：内置那 4 盘进 removed 名单；用户带靠重写 user_tapes 自然消失
-            if (TapeLibrary.any { t -> t.id == id }) {
+            // 落盘：内置的进 removed 名单（理论上走不到这里，留个兜底）；用户带靠重写 user_tapes 自然消失
+            if (isBuiltinTape(id)) {
                 removed += id
                 prefs.edit().putStringSet("removed", removed).apply()
             }
+            // 这盘带的封面图（用户换的那张）也一起收走，别在 filesDir 里越积越多
+            prefs.getString("cover_$id", null)?.let { runCatching { File(it).delete() } }
             prefs.edit()
                 .remove("uri_$id")
+                .remove("cover_$id")
                 .putString("user_tapes", serializeUserTapes(next))
                 .apply()
             assigned = assigned - id
@@ -644,7 +804,7 @@ class DuoMachine(
             bindAudio(target.id)
             persistLoaded()
             busy = false
-            hint(if (prev != null) "已换带 · ${target.title}" else "已落座 · 合上 Duo-Man 播放")
+            hint(if (prev != null) "已换带 · ${target.title}" else "已落座 · 合上 TFold 播放")
 
             if (autoPlay) {
                 if (hasAudio(target.id)) {
@@ -721,15 +881,15 @@ class DuoMachine(
     fun pressPlay() {
         audio.key()
         if (opened) {
-            hint("合上 Duo-Man 才能播放")
+            hint("合上 TFold 才能播放")
             return
         }
         val tape = loadedTape ?: return
         if (!hasAudio(tape.id)) {
-            arm(tape.id)
-            hint("空白磁带 · 请先为它选一首本机音乐")
+            blankHint(tape)
             return
         }
+        if (transport == Transport.REC) applyTransport(Transport.STOP)  // 正在录 → 先停录（这段照样存下）
         when (transport) {
             Transport.PLAY -> applyTransport(Transport.PAUSE)
             Transport.FF, Transport.REW -> resumePlay()
@@ -737,7 +897,22 @@ class DuoMachine(
         }
     }
 
+    /**
+     * 「这盘还没装曲目」。空白带**不**顺手弹选曲器 —— 它有自己的录法（按 ●），
+     * 用户想装一首按 ＋ 就行；别在人家只想按一下 ▶ 的时候甩一个文件选择器出来。
+     */
+    private fun blankHint(tape: Tape) {
+        if (tape.id == BLANK_TAPE_ID) {
+            hint("空白磁带 · 按 ● 录一段，或按 ＋ 装一首")
+        } else {
+            arm(tape.id)
+            hint("这盘还没装曲目 · 请先为它选一首本机音乐")
+        }
+    }
+
     private fun resumePlay() {
+        // 保险：走到 PLAY 的路径有好几条，任何一条都不能让麦克风还开着
+        if (transport == Transport.REC) finalizeRecording()
         if (tapePos >= 0.9995f) {
             tapePos = 0f
             virtualMs = 0f
@@ -758,8 +933,7 @@ class DuoMachine(
         audio.key()
         if (loadedId == null || opened) return
         if (!hasAudio(loadedId)) {
-            loadedId?.let { arm(it) }
-            hint("空白磁带 · 请先为它选一首本机音乐")
+            loadedTape?.let { blankHint(it) }
             return
         }
         if (transport == Transport.FF) {
@@ -775,8 +949,7 @@ class DuoMachine(
         audio.key()
         if (loadedId == null || opened) return
         if (!hasAudio(loadedId)) {
-            loadedId?.let { arm(it) }
-            hint("空白磁带 · 请先为它选一首本机音乐")
+            loadedTape?.let { blankHint(it) }
             return
         }
         if (transport == Transport.REW) {
@@ -801,37 +974,146 @@ class DuoMachine(
     }
 
     /**
-     * 录音键。
+     * 录音键 —— **真的在录**（麦克风）。
      *
-     * 纯模拟里没有麦克风输入，所以 REC 表达的是「抹音头压下、带头以 1× 前进」：
-     * 走带照常、输出静音、轮毂照常转 —— 也就是"在录"这件事看起来的样子。
-     * 再按一次 = 停录。
+     * 早先它只是"看起来在录"：带头走、输出静音、没有输入。现在接的是 `MediaRecorder`：
+     *  · 按下 → 抹音头压下、电机转、带头 1× 前进，同时往 `filesDir/recordings` 写一个 m4a；
+     *  · 再按一次 → 停止，把这一段**追加**成这盘带的一轨（落盘 + 重新绑定），按 ▶ 就能回放；
+     *  · 走带状态一旦离开 REC（按了别的键 / 退到后台 / 退出应用）也自动收尾，
+     *    绝不把半截文件留在那儿。
      *
      * 与 PLAY / FF / REW 不同，REC 不要求这盘带已经装过曲目 —— 空白带本来就是用来录的。
+     * 麦克风权限是**按下时才要**的（和「＋」要读音乐库权限同一个路子），拿到后自动重按一次。
      */
     fun pressRec() {
         audio.key()
         if (opened) {
-            hint("合上 Duo-Man 才能录音")
+            hint("合上 TFold 才能录音")
             return
         }
         val tape = loadedTape ?: run {
             hint("卡座是空的 · 先选一盘磁带")
             return
         }
-        if (transport == Transport.REC) {
-            applyTransport(Transport.STOP)
-            indicatorAt = 4
+        if (recorder != null) {
+            stopRecording()
             return
         }
+        if (app.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            recAsk++                    // UI 收到就去要权限，拿到后自动重按
+            hint("录音要麦克风权限")
+            return
+        }
+        startRecording(tape)
+    }
+
+    /** 麦克风权限刚拿到手 —— 用户那一下 REC 的意思就是"我要录"，接着做完它。 */
+    fun onRecPermissionGranted() = pressRec()
+
+    private fun startRecording(tape: Tape) {
+        val dir = File(app.filesDir, "recordings").apply { mkdirs() }
+        val file = File(dir, "rec-${tape.id}-${System.currentTimeMillis()}.m4a")
+        val r = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) MediaRecorder(app)
+            else {
+                @Suppress("DEPRECATION")
+                MediaRecorder()
+            }
+        }.getOrNull() ?: run {
+            hint("这台设备不能录音")
+            return
+        }
+        try {
+            r.setAudioSource(MediaRecorder.AudioSource.MIC)
+            r.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            r.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            r.setAudioSamplingRate(44_100)
+            r.setAudioEncodingBitRate(128_000)
+            r.setOutputFile(file.absolutePath)
+            r.prepare()
+            r.start()
+        } catch (e: Exception) {
+            Log.w(TAG, "startRecording failed: ${e.message}")
+            runCatching { r.release() }
+            runCatching { file.delete() }
+            hint("录音启动失败")
+            return
+        }
+        recorder = r
+        recFile = file
+        recTapeId = tape.id
+        recStartAt = SystemClock.elapsedRealtime()
+        recording = true
         if (transport == Transport.PLAY) virtualMs = audio.positionMs().toFloat()
         applyTransport(Transport.REC)
         indicatorAt = 4
-        hint("录音中 · ${tape.title}")
+        hint("录音中 · 再按一次结束")
+    }
+
+    /** REC 再按一次 = 停录：抬起抹音头 → 走带停 → 这一段挂到这盘带身上。 */
+    fun stopRecording() {
+        if (recorder == null) return
+        if (transport == Transport.REC) applyTransport(Transport.STOP)
+        else finalizeRecording()
+        indicatorAt = 3
+    }
+
+    /**
+     * 给这段录音收尾：`stop` + `release` + 追加成一轨 + 重新绑定。
+     *
+     * **不碰走带状态**（那是调用方的事）—— 所以可以从 `applyTransport` 里安全地掉进来，
+     * 不会来回递归。太短（`stop()` 会抛）或者文件没内容就删掉，宁可什么都不留。
+     */
+    private fun finalizeRecording() {
+        val r = recorder ?: return
+        recorder = null
+        recording = false
+
+        val ms = (SystemClock.elapsedRealtime() - recStartAt).toInt().coerceAtLeast(0)
+        val file = recFile
+        val id = recTapeId
+        recFile = null
+        recTapeId = null
+
+        var ok = true
+        try {
+            r.stop()                    // 录得太短时这里会抛 —— 那一段本来也没内容
+        } catch (e: Exception) {
+            ok = false
+        }
+        runCatching { r.release() }
+
+        if (!ok || id == null || file == null || !file.exists() ||
+            file.length() < 2048L || ms < 500
+        ) {
+            runCatching { file?.delete() }
+            hint(if (ms >= 500) "这段没录上" else "太短了 · 没留下")
+            return
+        }
+
+        // 追加成这盘带的一轨：`uri|毫秒`，和导入的曲目同一种写法 —— AudioEngine 一视同仁
+        val entry = "${Uri.fromFile(file)}|$ms"
+        val prev = assigned[id]
+        val blob = if (prev.isNullOrBlank()) entry else "$prev\n$entry"
+        assigned = assigned + (id to blob)
+        prefs.edit().putString("uri_$id", blob).apply()
+
+        // 重新绑定这盘带，并把带位挪到刚录的这段上 —— 按 ▶ 就从它开始回放
+        if (loadedId == id) {
+            bindAudio(id)
+            val before = tracksOf(id).dropLast(1).sumOf { it.second }
+            virtualMs = before.toFloat()
+            audio.seekTo(before)
+        }
+        hint("录下 ${ms / 1000} 秒 · 按 ▶ 回放")
     }
 
     private fun applyTransport(t: Transport) {
         if (t == transport) return
+        // 抹音头一抬起（走带离开 REC）就得把录音收干净 —— 不能让 m4a 一直开着
+        if (transport == Transport.REC) finalizeRecording()
         transport = t
         when (t) {
             Transport.PLAY -> {
@@ -866,7 +1148,7 @@ class DuoMachine(
     /**
      * 记下「这次选曲是给谁选的」，并**同时落盘**。
      *
-     * 落盘这件事不是保险起见 —— 是必须的：系统文件选择器会把 DuoMan 压到后台，
+     * 落盘这件事不是保险起见 —— 是必须的：系统文件选择器会把 TFold 压到后台，
      * 而它（在一台内存吃紧的 Fold 上）随时可能被回收。Activity 重建后系统仍会把
      * pick 结果补投回来，但**内存里的 `pendingTapeId` 已经没了**，
      * 于是回调只能拿到 `id = null`、这首歌被默默丢掉。
@@ -942,7 +1224,7 @@ class DuoMachine(
     private fun addNewTape(tapeId: String, uri: Uri) {
         scope.launch {
             val meta = withContext(Dispatchers.IO) { readMeta(uri) }
-            val k = (tapes.size - TapeLibrary.size).coerceAtLeast(0)
+            val k = (tapes.size - BuiltinTapes.size).coerceAtLeast(0)
             val tape = Tape(
                 id = tapeId,
                 title = meta.title,
@@ -981,10 +1263,10 @@ class DuoMachine(
         Meta(title, artist, (ms / 60_000L).toInt().coerceAtLeast(1))
     }.getOrDefault(Meta("未命名磁带", "未知艺术家", 60))
 
-    // ---- 用户新加的磁带落盘（内置那 4 盘是常量，不存） ----
+    // ---- 用户新加的磁带落盘（出厂那盘空白带是常量，不存） ----
 
     private fun serializeUserTapes(all: List<Tape>): String = all
-        .filter { t -> TapeLibrary.none { it.id == t.id } }
+        .filter { t -> !isBuiltinTape(t.id) }
         .joinToString("\u0002") { t ->
             listOf(
                 t.id, t.title, t.artist, t.minutes.toString(), t.typeLabel, t.style.name,
@@ -1093,7 +1375,7 @@ class DuoMachine(
             val added = mutableListOf<Tape>()
             fresh.forEach { s ->
                 val id = nextUserTapeId()
-                val k = (tapes.size - TapeLibrary.size + added.size).coerceAtLeast(0)
+                val k = (tapes.size - BuiltinTapes.size + added.size).coerceAtLeast(0)
                 val minutes = (s.totalMs / 60_000).coerceAtLeast(1)
                 val tape = Tape(
                     id = id, title = s.title, artist = s.artist, minutes = minutes,
@@ -1246,7 +1528,7 @@ class DuoMachine(
                     pos = virtualMs / dur
                 }
 
-                // 录音：1× 前进，但位置只由虚拟时间推 —— 没有音频可同步
+                // 录音：1× 前进，位置只由虚拟时间推 —— 录音还没有时长可同步
                 Transport.REC -> {
                     virtualMs += dtMs
                     pos = virtualMs / dur
