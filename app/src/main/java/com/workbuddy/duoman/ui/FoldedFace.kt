@@ -3,8 +3,10 @@ package com.workbuddy.duoman.ui
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,7 +26,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextMeasurer
-import androidx.compose.ui.text.font.FontFamily
 import com.workbuddy.duoman.machine.DuoMachine
 import com.workbuddy.duoman.machine.Transport
 import com.workbuddy.duoman.ui.parts.CASSETTE_H_RATIO
@@ -37,7 +38,6 @@ import com.workbuddy.duoman.ui.parts.drawKnob
 import com.workbuddy.duoman.ui.parts.hair
 import com.workbuddy.duoman.ui.parts.hairPx
 import com.workbuddy.duoman.ui.parts.knobAngleFromValue
-import com.workbuddy.duoman.ui.parts.knobValueFromAngle
 import com.workbuddy.duoman.ui.parts.led
 import com.workbuddy.duoman.ui.parts.text
 import kotlin.math.cos
@@ -48,7 +48,7 @@ import kotlin.math.sin
  *
  * 布局沿用 viditb 原概念的逻辑：
  *  磁带窗是主角，走带键是**右缘一列竖排**（最上是唯一的安全橙 PLAY），
- *  左上品牌字标、右上圆形旋钮。
+ *  顶带左边扬声器栅、右边圆形音量旋钮。
  * 但整套皮肤换成 Braun / 拉姆斯：瓷白机身、通风栅、浅色凸起键、黑旋钮。
  *
  * 尺寸由「屏宽」定标、「屏高」兜底，从外屏到任何竖屏都不会打架。
@@ -77,55 +77,58 @@ fun FoldedFace(
             drawFoldedFace(machine, tm, w, h, m, pressed, knob.value)
         }
 
-        // 音量旋钮：只有从旋钮上起手才算拧它。
+        // 一层的指针处理同时管两件事 —— 分成两层的话，上面那层会把按下事件消费掉，
+        // 底下的旋钮永远收不到（曾经拧不动就是这个原因）。
+        //   · 从旋钮圆里起手 → 拧音量（按角度增量累计，起手不跳）
+        //   · 从竖排键里起手 → 按下沉、松手触发
         Box(
             Modifier
                 .fillMaxSize()
                 .pointerInput(Unit) {
-                    var active = false
-                    detectDragGestures(
-                        onDragStart = { start ->
-                            val dx = start.x - m.knobCx
-                            val dy = start.y - m.knobCy
-                            active = (dx * dx + dy * dy) <= (m.knobR * 1.5f) * (m.knobR * 1.5f)
-                        },
-                        onDragEnd = { active = false },
-                        onDragCancel = { active = false },
-                    ) { change, _ ->
-                        if (!active) return@detectDragGestures
-                        change.consume()
-                        val a = angleOf(m.knobCx, m.knobCy, change.position.x, change.position.y)
-                        machine.adjustVolume(knobValueFromAngle(a.coerceIn(-135f, 135f)))
-                    }
-                }
-        )
+                    awaitEachGesture {
+                        val down = awaitFirstDown()
 
-        // 竖排走带键。
-        Box(
-            Modifier
-                .fillMaxSize()
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onPress = { pos ->
-                            val i = m.keyIndexAt(pos)
-                            if (i >= 0 && !machine.busy) {
-                                pressed = i
-                                tryAwaitRelease()
-                                pressed = -1
+                        // ---- 旋钮
+                        val kdx = down.position.x - m.knobCx
+                        val kdy = down.position.y - m.knobCy
+                        val hitR = m.knobR * 1.6f
+                        if (kdx * kdx + kdy * kdy <= hitR * hitR) {
+                            down.consume()
+                            val base = machine.volume
+                            var prev = angleOf(m.knobCx, m.knobCy, down.position.x, down.position.y)
+                            var acc = 0f
+                            drag(down.id) { change ->
+                                change.consume()
+                                val a = angleOf(m.knobCx, m.knobCy, change.position.x, change.position.y)
+                                var d = a - prev
+                                if (d > 180f) d -= 360f      // 跨过 ±180° 的接缝
+                                if (d < -180f) d += 360f
+                                acc += d
+                                prev = a
+                                machine.adjustVolume(base + acc / 270f)
                             }
-                        },
-                        onTap = { pos ->
-                            if (machine.busy) return@detectTapGestures
+                            return@awaitEachGesture
+                        }
+
+                        // ---- 竖排走带键
+                        val i = m.keyIndexAt(down.position)
+                        if (i < 0) return@awaitEachGesture
+                        down.consume()
+                        if (machine.busy) return@awaitEachGesture
+                        pressed = i
+                        val up = waitForUpOrCancellation()
+                        pressed = -1
+                        if (up != null) {
                             // 竖排自上而下：PLAY FF REW REC EJECT
-                            when (m.keyIndexAt(pos)) {
+                            when (i) {
                                 0 -> machine.pressPlay()
                                 1 -> machine.pressFF()
                                 2 -> machine.pressREW()
                                 3 -> machine.pressRec()
                                 4 -> machine.pressEject()
                             }
-                        },
-                    )
+                        }
+                    }
                 }
         )
     }
@@ -145,23 +148,20 @@ private fun stripIndexOf(indicatorAt: Int): Int = when (indicatorAt) {
 class FoldMetric(val w: Float, val h: Float) {
     val inset = w * 0.056f
 
-    // 顶带：左字标、中通风栅、右音量旋钮
+    // 顶带：左扬声器栅（左对齐）、右音量旋钮 —— 同一水平中线
     val topY = inset * 0.9f
     val knobR = w * 0.082f
     val knobCx = w - inset - knobR
     val knobCy = topY + knobR
-    val wordX = inset
-    val wordY = topY + knobR * 0.9f
-    val grilleX = inset + w * 0.30f
-    val grilleW = w * 0.30f
-    val grilleY = topY + w * 0.010f
-    val grilleSlots = 4
-    val grilleSlotH = w * 0.012f
-    val grilleGap = w * 0.030f
-    val topBandBottom = maxOf(
-        knobCy + knobR,
-        grilleY + (grilleSlots - 1) * grilleGap + grilleSlotH,
-    ) + w * 0.045f
+    // 扬声器栅：细密横槽，宽约 1/3 屏，跟旋钮同轴居中
+    val grilleX = inset
+    val grilleW = w * 0.34f
+    val grilleSlots = 6
+    val grilleSlotH = w * 0.0090f
+    val grilleGap = w * 0.0195f
+    val grilleH = (grilleSlots - 1) * grilleGap + grilleSlotH
+    val grilleY = knobCy - grilleH / 2f
+    val topBandBottom = maxOf(knobCy + knobR, grilleY + grilleH) + w * 0.048f
 
     // 右缘竖排键：PLAY FF REW REC EJECT（自上而下）
     val keyGap = w * 0.020f
@@ -232,7 +232,7 @@ private fun DrawScope.drawFoldedFace(
         CornerRadius(9f * density), style = Stroke(hairPx()),
     )
 
-    // 通风栅（顶带左段，原来字标的位置）
+    // 扬声器栅（顶带左段，左对齐）
     drawGrille(m.grilleX, m.grilleY, m.grilleW, m.grilleSlots, m.grilleSlotH, m.grilleGap)
 
     // 音量旋钮（右上）+ 一圈刻度

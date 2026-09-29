@@ -1,6 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- 长按删除落定时的触感 -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- 自动查找本机音乐（按专辑/目录收成一盘磁带）：
+         Android 13+ 用细分权限，12 及以下退回读外部存储 -->
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"

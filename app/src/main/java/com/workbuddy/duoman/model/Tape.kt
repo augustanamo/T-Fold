@@ -42,3 +42,18 @@ val TapeLibrary: List<Tape> = listOf(
         art = listOf(Color(0xFFEEEBE4), Color(0xFF2A2A28), Color(0xFFB9B7B0)),
     ),
 )
+
+/**
+ * 用户用「＋」**新加**的磁带。
+ *
+ * 盒面用的是那首音频内嵌的专辑图（`DuoMachine.coverArt`），
+ * 只有抽不到图时才回落到下面这些程序化构成 —— 按加入顺序轮流取，看起来不至于千篇一律。
+ */
+val UserTapeStyles = listOf(CoverStyle.ORBIT, CoverStyle.HORIZON, CoverStyle.STRIPES, CoverStyle.GRID)
+
+val UserTapePalettes = listOf(
+    listOf(Color(0xFFEEEBE4), Color(0xFF2A2A28), Color(0xFFB9B7B0)),
+    listOf(Color(0xFFE7DFD2), Color(0xFF2B2B28), Color(0xFFD8CFC0)),
+    listOf(Color(0xFF2E3A3C), Color(0xFFD9D7CE), Color(0xFF8A9A9C)),
+    listOf(Color(0xFFC9C4B8), Color(0xFFCE4A1E), Color(0xFF8A8880)),
+)

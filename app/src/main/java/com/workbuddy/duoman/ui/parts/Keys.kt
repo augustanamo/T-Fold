@@ -5,7 +5,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
 import com.workbuddy.duoman.ui.C
 
 /** 五个功能键 —— 一套符号，不加图标底色，不写一个字。 */
@@ -74,13 +73,16 @@ fun DrawScope.drawKey(
     armed: Boolean,
 ) {
     val r = CornerRadius(3f * density)
-    val sink = if (pressed) 1f * density else 0f
+    val sink = if (pressed) 1.5f * density else 0f
     // 主走带键（PLAY/PAUSE）= 全机唯一的安全橙 —— 和原概念里那颗橙色 PLAY 同理
     val isAccent = kind == KeyKind.PLAY || kind == KeyKind.PAUSE
 
-    // 键槽（凹）：按键坐进一条比它略大的浅槽
+    // 键槽（凹）：按键坐进一条比它略大一圈的浅槽里
+    val slot = 1.5f * density
     drawRoundRect(
-        C.KeyLightEdge.copy(alpha = 0.55f), Offset(x - sink, y - sink), Size(w, h), r,
+        C.KeyLightEdge.copy(alpha = 0.55f),
+        Offset(x - slot, y - slot), Size(w + slot * 2f, h + slot * 2f),
+        CornerRadius(3f * density + slot),
     )
     // 键体
     val body = when {
@@ -89,15 +91,17 @@ fun DrawScope.drawKey(
         else -> C.KeyLight
     }
     drawRoundRect(body, Offset(x, y + sink), Size(w, h), r)
-    // 上缘受光 / 下缘背光（橙色键也保留这层体积）
+    // 体积：只在**键面内部**给一道顶高光 + 一道底暗线（不超出键体，否则会拖出幽灵框）
+    val inX = x + r.x * 0.7f
+    val inW = w - r.x * 1.4f
     drawRoundRect(
-        if (isAccent) Color(0x40FFFFFF) else Color(0x66FFFFFF),
-        Offset(x + 1f, y + sink + 1f), Size(w - 2f, h - 2f), r,
-        style = Stroke(hairPx()),
+        if (isAccent) Color(0x4DFFFFFF) else Color(0x80FFFFFF),
+        Offset(inX, y + sink + 1.2f * density), Size(inW, hairPx()), CornerRadius(0f),
     )
     drawRoundRect(
-        Color(0x1F000000), Offset(x, y + sink + h - hairPx() * 2f), Size(w, h), r,
-        style = Stroke(hairPx() * 2f),
+        Color(0x1F000000),
+        Offset(inX, y + sink + h - 1.8f * density), Size(inW, 0.8f * density),
+        CornerRadius(0.4f * density),
     )
     // 丝印：橙色键用 Ivory，其余用石墨
     val ink = when {

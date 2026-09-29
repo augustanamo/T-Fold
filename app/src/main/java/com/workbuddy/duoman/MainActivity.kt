@@ -57,6 +57,7 @@ import com.workbuddy.duoman.audio.AudioEngine
 import com.workbuddy.duoman.machine.DuoMachine
 import com.workbuddy.duoman.ui.DuoManScreen
 import com.workbuddy.duoman.ui.FoldedFace
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -138,17 +139,33 @@ class MainActivity : ComponentActivity() {
         val dm = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
         dm.registerDisplayListener(
             object : DisplayManager.DisplayListener {
-                override fun onDisplayAdded(displayId: Int) = pinOrientation()
-                override fun onDisplayRemoved(displayId: Int) = pinOrientation()
-                override fun onDisplayChanged(displayId: Int) = pinOrientation()
+                override fun onDisplayAdded(displayId: Int) = onDisplaySwitch()
+                override fun onDisplayRemoved(displayId: Int) = onDisplaySwitch()
+                override fun onDisplayChanged(displayId: Int) = onDisplaySwitch()
             },
             null,
         )
     }
 
+    /**
+     * 面板换了（内屏亮/灭、Activity 被挪到另一块屏）。
+     *
+     * Activity 的窗口被系统搬到另一块屏上时，`display` 会变但 **onCreate/onResume 都不重跑**，
+     * 所以这里必须手动做三件事，否则表现就是「合上再展开，内屏上还停在播放面」：
+     *  1. 重新钉方向 —— 新面板的原生形状可能不一样；
+     *  2. 重新订阅折叠特征 —— 旧订阅绑在旧窗口上，不会再发新值，
+     *     而 `DuoManScreen` 在竖幅窗口上会去问 `foldState`，僵值直接导致画面错。
+     * 外屏呈现那条 flow 是全局的（不绑窗口），不需要在这里重订。
+     */
+    private fun onDisplaySwitch() {
+        pinOrientation()
+        observeFoldState()
+    }
+
     override fun onResume() {
         super.onResume()
         pinOrientation()
+        observeFoldState()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -171,17 +188,41 @@ class MainActivity : ComponentActivity() {
      * 外屏没有铰链特征（foldState 置 null），UI 退回宽高比判断；
      * 系统会把顶层 Activity 连续地挪到外屏 —— 播放面因此始终落在外屏。
      */
+    /** 上次订阅折叠特征时所在的屏 —— 换屏就必须重订。 */
+    private var foldDisplayId = Int.MIN_VALUE
+    private var foldJob: Job? = null
+
+    /**
+     * 折叠态（FoldingFeature）。
+     *
+     * **订阅是绑在 Activity 的窗口上的**：窗口被系统从内屏挪到外屏（或反过来）之后，
+     * 原来那个 flow 不会再发新值，`foldState` 就僵在换屏前的那个值上 ——
+     * 实测表现正是「合上再展开，内屏上还按半开给出播放面」。
+     * 所以每次**换屏**：取消旧订阅 → 把状态退回 null（让宽高比判定先顶上）→ 重新订阅。
+     */
     private fun observeFoldState() {
-        lifecycleScope.launch {
+        val id = display?.displayId ?: -1
+        if (id == foldDisplayId && foldJob?.isActive == true) return
+        foldDisplayId = id
+        foldJob?.cancel()
+        machine?.foldState = null
+        Log.i(TAG, "foldState: re-bind on display $id")
+        foldJob = lifecycleScope.launch {
             WindowInfoTracker.getOrCreate(this@MainActivity)
                 .windowLayoutInfo(this@MainActivity)
                 .collect { info ->
+                    // 折叠特征一变，正在用的面板多半也变了 —— 顺手重钉一次方向
+                    pinOrientation()
                     val ff = info.displayFeatures.filterIsInstance<FoldingFeature>().firstOrNull()
-                    machine?.foldState = when {
+                    val st = when {
                         ff == null -> null
                         ff.state == FoldingFeature.State.FLAT -> true
                         else -> false
                     }
+                    if (machine?.foldState != st) {
+                        Log.i(TAG, "foldState: $st (feature=${ff?.state}, display=${display?.displayId})")
+                    }
+                    machine?.foldState = st
                 }
         }
     }
