@@ -1,4 +1,4 @@
-package com.workbuddy.duoman.ui
+package com.augustana.tfold.ui
 
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -17,10 +17,21 @@ import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
-import com.workbuddy.duoman.model.CoverStyle
-import com.workbuddy.duoman.model.Tape
-import com.workbuddy.duoman.ui.parts.hair
-import com.workbuddy.duoman.ui.parts.hairPx
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.font.FontWeight
+import com.augustana.tfold.model.CoverStyle
+import com.augustana.tfold.model.Tape
+import com.augustana.tfold.ui.parts.Align
+import com.augustana.tfold.ui.parts.CASSETTE_IN_BOX
+import com.augustana.tfold.ui.parts.CASSETTE_IN_BOX_X
+import com.augustana.tfold.ui.parts.HUB_R
+import com.augustana.tfold.ui.parts.HUB_V_BOT
+import com.augustana.tfold.ui.parts.HUB_V_TOP
+import com.augustana.tfold.ui.parts.hair
+import com.augustana.tfold.ui.parts.hairPx
+import com.augustana.tfold.ui.parts.label
+import com.augustana.tfold.ui.parts.text
+import com.augustana.tfold.ui.parts.textClipped
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.roundToInt
@@ -109,9 +120,17 @@ fun DrawScope.drawCover(
 }
 
 /**
- * 白纸 J 卡（例图右侧那张）：白纸上印一枚单色图案，下方几行曲目细线，
- * 右下一枚签名色块。绑了曲目就把内嵌封面图印上去（留白 contain），
- * 没绑就用构成法以单色墨印 —— 和真 J 卡一样，图案是"印在纸上"的。
+ * J 卡（盒面）—— 照独立厂牌磁带的版式语言做（参考实拍：NMR / UMBOR 那一类）。
+ *
+ *  ① **图**：有内嵌封面就**整张放进去、不裁**（contain）；没有就把构成法的图案印在白纸上。
+ *  ② **文字**：全部排在封面**之外**那条纸带上，一个字都不压到图上 ——
+ *     艺术家（大写宽字距）+ 专辑名（中号，超长裁省略号）
+ *     + 右侧规格（`TYPE I · 9 MIN`、轨数）+ 右下角一枚墨色块。
+ *
+ * 两条都是"踩过才知道"的：
+ *  · 原来图是铺满（cover 裁切）—— 很多封面自己就把专辑名印在图上，一裁就切掉半行；
+ *  · 原来左上角还贴一枚带子 id 的目录号小签 —— 它跟封面抢位置，用户要的是干净封面。
+ * 判断"封面里有没有字"做不可靠（要 OCR），但不需要判断：整张展示对两种封面都安全。
  */
 private fun DrawScope.drawJCard(
     tape: Tape,
@@ -121,55 +140,91 @@ private fun DrawScope.drawJCard(
     h: Float,
     alpha: Float,
     art: ImageBitmap?,
+    tm: TextMeasurer,
+    trackCount: Int,
 ) {
     val cr = CornerRadius(w * 0.018f)
     val ink = tape.art.getOrElse(1) { Color(0xFF2F4A3C) }
+    val paperTop = Color(0xFFFAF9F5)
+    val paperBot = Color(0xFFECEAE3)
+    val pad = w * 0.075f
 
-    // 纸：微暖的白，底部略沉
+    // 纸
     drawRoundRect(
-        Brush.verticalGradient(0f to Color(0xFFFAF9F5), 1f to Color(0xFFECEAE3)),
+        Brush.verticalGradient(0f to paperTop, 1f to paperBot),
         Offset(x, y), Size(w, h), cr, alpha = alpha,
     )
 
-    // 图案区：居中留白，像贴上去的印刷块
-    val ax = x + w * 0.115f
-    val ay = y + h * 0.085f
-    val aw = w * 0.77f
-    val ah = h * 0.545f
+    val stripH = h * 0.150f          // 文字带
+    val imgH = h - stripH
+
+    // ---- ① 图：**整张放进图片区，一个像素都不裁**
+    //
+    // 之前是"铺满"（cover 裁切）—— 看着满，但很多专辑封面自己就把专辑名/艺人印在图上，
+    // 有的干脆是一整张海报：铺满会把那行字横着切掉半边，封面越"满"越糟。
+    // 判断"这张图里有没有文字"做不可靠（要 OCR/模型），但**不需要判断**：
+    // 整张展示对两种封面都安全 —— 有字的一个字不少，没字的也只是四周留出纸边
+    // （真磁带的 J 卡本来就是"纸 + 印上去的图"）。代价只是留白，切掉的却是内容。
     if (art != null) {
-        clipRect(ax, ay, ax + aw, ay + ah) {
-            val s = minOf(aw / art.width, ah / art.height)
+        clipRect(x, y, x + w, y + imgH) {
+            val s = minOf(w / art.width, imgH / art.height)   // contain：长边贴边，短边留纸
             val dw = art.width * s
             val dh = art.height * s
             drawImage(
                 art,
-                dstOffset = IntOffset((ax + (aw - dw) / 2f).roundToInt(), (ay + (ah - dh) / 2f).roundToInt()),
+                srcOffset = IntOffset.Zero,
+                srcSize = IntSize(art.width, art.height),
+                dstOffset = IntOffset((x + (w - dw) / 2f).roundToInt(), (y + (imgH - dh) / 2f).roundToInt()),
                 dstSize = IntSize(dw.roundToInt(), dh.roundToInt()),
                 alpha = alpha,
                 filterQuality = FilterQuality.Medium,
             )
         }
     } else {
-        paperArt(tape, ax, ay, aw, ah, alpha)
+        val m = w * 0.10f
+        paperArt(tape, x + m, y + m * 0.75f, w - m * 2f, imgH - m * 1.5f, alpha)
     }
 
-    // 曲目细线：图案下方两列短灰线（无字，只是"印了字"的密度感）
-    val lineInk = Color(0x4D9A9890)
-    val colX1 = x + w * 0.115f
-    val colX2 = x + w * 0.60f
-    for (i in 0 until 5) {
-        val ly = ay + ah + h * 0.045f + i * h * 0.048f
-        if (ly > y + h * 0.94f) break
-        drawLine(lineInk, Offset(colX1, ly), Offset(colX1 + w * (if (i % 2 == 0) 0.30f else 0.22f), ly), strokeWidth = hairPx(), alpha = alpha)
-        if (i < 3) drawLine(lineInk, Offset(colX2, ly), Offset(colX2 + w * 0.16f, ly), strokeWidth = hairPx(), alpha = alpha)
-    }
+    // （原来这里贴着一枚"目录号小签"—— 带子 id 压在封面左上角。已去掉：
+    //   它跟封面争夺同一块位置，用户要的是一张干净的封面。）
 
-    // 右下一枚签名色块 —— 这一盘的墨色
+    // ---- ② 文字带：封面之外的一条纸 —— 我们的排版只在这条带上做，绝不压到图上
+    val bandY = y + imgH
+    drawRect(Brush.verticalGradient(0f to paperTop, 1f to paperBot), Offset(x, bandY), Size(w, stripH), alpha = alpha)
+    drawLine(Color(0x33000000), Offset(x, bandY), Offset(x + w, bandY), strokeWidth = hairPx(), alpha = alpha)
+
+    val rightW = w * 0.26f
+    val leftW = w - pad * 2f - rightW
+    val artistSize = w * 0.040f
+    val titleSize = w * 0.052f
+
+    if (tape.artist.isNotBlank()) {
+        label(tm, tape.artist.uppercase(), x + pad, bandY + stripH * 0.30f, artistSize, C.SteelDeep, alpha = alpha)
+    }
+    textClipped(
+        tm, tape.title, x + pad, bandY + stripH * 0.66f, titleSize, ink, leftW,
+        weight = FontWeight.Medium, alpha = alpha,
+    )
+    // 右侧规格：`TYPE I · 9 MIN` + 轨数
+    text(
+        tm, tape.typeLabel, x + w - pad, bandY + stripH * 0.34f, artistSize * 0.82f, C.SteelDeep,
+        align = Align.Right, alpha = alpha * 0.9f,
+    )
+    val tk = when {
+        trackCount <= 0 -> "BLANK"
+        trackCount == 1 -> "1 TRACK"
+        else -> "$trackCount TRACKS"
+    }
+    text(
+        tm, tk, x + w - pad, bandY + stripH * 0.70f, artistSize * 0.82f, C.SteelDeep,
+        align = Align.Right, alpha = alpha * 0.9f,
+    )
+    // 右下角一枚墨色块 —— 这一盘的签名色
     drawRect(
         ink,
-        Offset(x + w * 0.74f, y + h * 0.905f),
-        Size(w * 0.115f, h * 0.020f),
-        alpha = alpha,
+        Offset(x + w - pad - w * 0.085f, bandY + stripH * 0.88f),
+        Size(w * 0.085f, h * 0.009f),
+        alpha = alpha * 0.9f,
     )
 
     // 纸边
@@ -242,6 +297,10 @@ fun DrawScope.drawCoverCard(
     open: Float = 0f,
     alpha: Float = 1f,
     art: ImageBitmap? = null,
+    /** 盒面 J 卡上那些"这盘带自己的"文字要用它排版；不传就退回无字版式。 */
+    tm: TextMeasurer? = null,
+    /** 这盘带里有几首歌（`BLANK` / `1 TRACK` / `N TRACKS`）。 */
+    trackCount: Int = 0,
 ) {
     val e = open.coerceIn(0f, 1f).let { it * it * (3f - 2f * it) } // smoothstep：起收都软
     val crf = w * 0.035f
@@ -287,11 +346,14 @@ fun DrawScope.drawCoverCard(
         ),
         Offset(x + ci, y + ci), cav, CornerRadius(crf * 0.6f), alpha = alpha,
     )
-    // 模位偏在「掀开后真正露得出来的那一侧」—— 居中会被盖板整个挡回去，白做
-    val bayX = x + w * 0.63f
-    val bayR = w * 0.140f
-    listOf(0.288f, 0.712f).forEach { v ->
-        val top = y + h * v - bayR
+    // 模位偏在「掀开后真正露得出来的那一侧」—— 居中会被盖板整个挡回去，白做。
+    // 位置与孔距**按躺在盒里的那盘带推**（CASSETTE_IN_BOX / CASSETTE_IN_BOX_X）：
+    // 带子在盒里只有 0.76 盒宽，所以它的两个轮毂落在 0.5 ∓ 0.212×0.76 处、中心在 0.60 盒宽 ——
+    // 不能再用带子本体（1.0 盒宽）的 0.288 / 0.712 去放，那样孔距会宽出 0.102 盒高，孔对不上。
+    val bayX = x + w * CASSETTE_IN_BOX_X
+    val bayR = w * CASSETTE_IN_BOX * HUB_R * 1.25f
+    listOf(HUB_V_TOP, HUB_V_BOT).forEach { v ->
+        val top = y + h * (0.5f + (v - 0.5f) * CASSETTE_IN_BOX) - bayR
         // 凹槽：外圈一道亮沿，槽底沉下去，正中一只毂芯
         drawOval(Color(0x59000000), Offset(bayX - bayR, top), Size(bayR * 2f, bayR * 2f), alpha = alpha)
         drawOval(
@@ -307,8 +369,9 @@ fun DrawScope.drawCoverCard(
             alpha = alpha, style = Stroke(hairPx()),
         )
     }
-    val winTL = Offset(bayX - w * 0.165f, y + h * 0.415f)
-    val winSize = Size(w * 0.33f, h * 0.17f)
+    // 中央那道窗（真实带盒正面的透明窗，印在腔底）：宽高也按盒内带子收一圈
+    val winTL = Offset(bayX - w * CASSETTE_IN_BOX * 0.21f, y + h * (0.5f - CASSETTE_IN_BOX * 0.105f))
+    val winSize = Size(w * CASSETTE_IN_BOX * 0.42f, h * CASSETTE_IN_BOX * 0.21f)
     val winCr = CornerRadius(w * 0.012f)
     drawRoundRect(Color(0x73000000), winTL, winSize, winCr, alpha = alpha)
     drawRoundRect(Color(0x4DFFFFFF), winTL, winSize, winCr, alpha = alpha, style = Stroke(hairPx()))
@@ -382,7 +445,20 @@ fun DrawScope.drawCoverCard(
             ),
             Offset(0f, 0f), Size(w, h), cr, alpha = alpha,
         )
-        drawJCard(tape, inset, inset * 0.8f, w - inset * 2f, h - inset * 1.6f, alpha, art)
+        // 盖板上印的是这一盘带自己的 J 卡：真有封面图就铺满，文字带写它自己的
+        // 艺术家/专辑/规格/轨数 —— 没有 TextMeasurer 时退回无字版（老调用点不会崩）
+        val cardW = w - inset * 2f
+        val cardH = h - inset * 1.6f
+        if (tm != null) {
+            drawJCard(tape, inset, inset * 0.8f, cardW, cardH, alpha, art, tm, trackCount)
+        } else {
+            drawRoundRect(
+                Brush.verticalGradient(0f to Color(0xFFFAF9F5), 1f to Color(0xFFECEAE3)),
+                Offset(inset, inset * 0.8f), Size(cardW, cardH),
+                CornerRadius(cardW * 0.018f), alpha = alpha,
+            )
+            paperArt(tape, inset + cardW * 0.10f, inset * 0.8f + cardH * 0.075f, cardW * 0.80f, cardH * 0.85f, alpha)
+        }
         // 纸坐在壳里：上、左两道暗边，下、右两道亮边
         drawRect(
             Brush.verticalGradient(0f to Color(0x33000000), 1f to Color.Transparent),

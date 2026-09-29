@@ -1,4 +1,4 @@
-package com.workbuddy.duoman.ui.parts
+package com.augustana.tfold.ui.parts
 
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -14,9 +14,12 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.rotate
-import com.workbuddy.duoman.model.Tape
-import com.workbuddy.duoman.ui.C
-import com.workbuddy.duoman.ui.mix
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.toArgb
+import com.augustana.tfold.model.Tape
+import com.augustana.tfold.ui.C
+import com.augustana.tfold.ui.mix
+import kotlin.math.abs
 
 /**
  * 磁带几何（全部相对带盒宽度 sw）：
@@ -28,12 +31,73 @@ import com.workbuddy.duoman.ui.mix
  *  - 全透明清壳：零件全部画在壳里，再罩一层磨砂
  *  - 两毂之间一道贯穿的透明窗板（真实带芯结构）：两个轮毂圆孔 + 中央窄带窗
  *  - 白标签只占上半，盖住顶盘区域；收带盘整盘裸露在清壳区
- *  - 毂旁红色记号弧、右侧红色塑料螺丝、壳缘细条纹、壳内青色灯光
+ *  - 毂旁红色记号弧、右侧红色塑料螺丝、壳缘细条纹
+ *  - **清壳的色随封面走**（[shellTintOf]）：壳内透光 + 那层磨砂、窗板、壳缘都是同一个色相 ——
+ *    所以四盘带的壳各不相同，但都还是"透明带"，不是彩色塑料壳
  */
 const val CASSETTE_H_RATIO = 1.56f
 private const val R_MAX = 0.325f
 private const val R_MIN = 0.150f
-private const val HUB_R = 0.115f
+const val HUB_R = 0.115f
+
+/** 两个轮毂中心的高度（相对带高）—— 画带子、画盒腔模位都用它，只有一处真源。 */
+const val HUB_V_TOP = 0.288f
+const val HUB_V_BOT = 0.712f
+
+/**
+ * 磁带**躺在包装盒里**的静止位：尺寸相对盒宽、中心相对盒宽。
+ *
+ * 飞行体（DuoManScreen）与盒腔模位（Cover）都以它为基准：
+ *  · 尺寸取 0.88 —— 盒与带同为 1.56 宽高比，0.88 时上下、左右各留约 6% 盒壳壁，
+ *    正好是"一盘带塞在它的盒里"那种贴合感（0.76 太松，看着像盒里放了个小人）；
+ *  · 中心取 0.525 —— 盒腔模位偏到盖板**自由边之外**那一侧：盖板开到底只压住
+ *    0..cos(48°)≈0.669 盒宽，剩下的 0.669..0.965 这一段才是真正露得出来的。
+ * 模位的**孔距**就是由它推出来的（`0.424 × 0.88 = 0.373` 盒高），别再按带子本体
+ * 的 0.424 盒高去放 —— 那正是"盒子里的两个孔和带子对不上"的原因。
+ */
+const val CASSETTE_IN_BOX = 0.88f
+const val CASSETTE_IN_BOX_X = 0.525f
+
+/** 一个颜色的"彩度"（RGB 通道极差）—— 只用它挑"有没有色"，不做真正的 HSV 换算。 */
+private fun chromaticOf(c: Color): Float =
+    maxOf(c.red, c.green, c.blue) - minOf(c.red, c.green, c.blue)
+
+/**
+ * 透明壳的**色**从哪来 —— 默认是清壳带，你看到的色是封面透过塑料染上来的：
+ *  · 有封面图 → 用封面主色（`DuoMachine` 在 IO 里抽好传进来）；
+ *  · 没有 → 取盒面配色里最有颜色的那一档（构成法那几盘）；
+ *  · 连配色都是灰的 → 按带子 id 定一个色相（同一盘永远同色，不同带子颜色不同）。
+ *
+ * 结果会**归一化**到薄塑料该有的范围：彩度不过 0.55、明度 0.96 ——
+ * 这样壳里的零件、印刷记号、金属件都还读得出来，不会糊成一块彩色塑料。
+ */
+fun shellTintOf(tape: Tape, coverTint: Color? = null): Color {
+    val base = coverTint?.takeIf { chromaticOf(it) > 0.10f }
+        ?: tape.art.maxByOrNull { chromaticOf(it) }?.takeIf { chromaticOf(it) >= 0.22f }
+    var hue: Float
+    var sat: Float
+    if (base != null) {
+        val hsv = FloatArray(3)
+        android.graphics.Color.colorToHSV(base.toArgb(), hsv)
+        hue = hsv[0]
+        sat = hsv[1]
+        if (sat < 0.20f) {                       // 封面是灰的 → 灰没有色相，退回按 id 定色
+            hue = (abs(tape.id.hashCode()) % 360).toFloat()
+            sat = 0.46f
+        }
+    } else {
+        hue = (abs(tape.id.hashCode()) % 360).toFloat()
+        sat = 0.46f
+    }
+    return Color.hsv(hue.coerceIn(0f, 359.9f), sat.coerceIn(0.22f, 0.55f), 0.96f)
+}
+
+/** 壳里那盏灯：同色相但更浓更亮 —— 光穿过塑料比塑料本身更"有色"。 */
+fun glowOf(tint: Color): Color {
+    val hsv = FloatArray(3)
+    android.graphics.Color.colorToHSV(tint.toArgb(), hsv)
+    return Color.hsv(hsv[0], (hsv[1] * 1.55f).coerceIn(0.30f, 0.92f), 1f)
+}
 
 fun rMaxOf(sw: Float) = R_MAX * sw
 
@@ -97,12 +161,14 @@ fun DrawScope.drawCassette(
     angleTop: Float,
     angleBot: Float,
     style: CassetteStyle = CassetteStyle.InRecess,
+    /** 这盘带的清壳色（= 封面主色）。null 就按盒面配色 / 带子 id 推。 */
+    tint: Color? = null,
 ) {
     val sw = w
     val sh = h
     val hubX = sw * 0.5f
-    val topY = sh * 0.288f
-    val botY = sh * 0.712f
+    val topY = sh * HUB_V_TOP
+    val botY = sh * HUB_V_BOT
     val hubR = sw * HUB_R
     val rTop = packRadius(tapePos, sw, takeUp = false)
     val rBot = packRadius(tapePos, sw, takeUp = true)
@@ -117,7 +183,10 @@ fun DrawScope.drawCassette(
         if (mx - mn > 0.25f && mx < 0.98f) rawAccent else Color(0xFFE8433E)
     }
     val shellPath = rrPath(0f, 0f, sw, sh, crf)
-    val glow = Color(0xFF4DF2E0)
+    // 清壳的色：默认透明带本身无色，色相来自封面（每盘不同）。
+    // `shellTint` = 塑料染上的那层淡色，`glow` = 从里面透出来的灯（同色相、更浓更亮）。
+    val shellTint = tint ?: shellTintOf(tape)
+    val glow = glowOf(shellTint)
 
     // 中央窗板（贯穿两毂的透明凸台）与带窗几何
     val stripX = sw * 0.315f
@@ -196,7 +265,7 @@ fun DrawScope.drawCassette(
         addRoundRect(RoundRect(winX, winY, winX + winW, winY + winH, CornerRadius(sw * 0.012f)))
         fillType = PathFillType.EvenOdd
     }
-    drawPath(stripPath, Color(0x26E9F4F0))
+    drawPath(stripPath, shellTint.copy(alpha = 0.17f))
     // 孔缘印刷细环 + 带窗内凹边（上暗下亮）
     listOf(topY, botY).forEach { cy ->
         drawCircle(Color(0x40A09E96), cutR + hairPx(), Offset(hubX, cy), style = Stroke(hairPx()))
@@ -217,7 +286,8 @@ fun DrawScope.drawCassette(
     )
 
     // ============ 5. 磨砂清壳覆层：让零件“陷进”塑料里 ============
-    drawRoundRect(Color(0x16E9F5F1), Offset(0f, 0f), Size(sw, sh), cr)
+    //  清壳本身无色 —— 这层是**塑料被封面染上的那点色**，每盘带都不一样。
+    drawRoundRect(shellTint.copy(alpha = 0.15f), Offset(0f, 0f), Size(sw, sh), cr)
     drawRoundRect(tape.art.getOrElse(0) { Color(0xFFE7DFD2) }, Offset(0f, 0f), Size(sw, sh), cr, alpha = 0.05f)
 
     // ============ 6. 清壳玻璃感：斜向硬高光（clip 在壳形里） ============
@@ -276,7 +346,7 @@ fun DrawScope.drawCassette(
     drawLine(Color(0x88FFFFFF), Offset(crf, hairPx()), Offset(sw - crf, hairPx()), strokeWidth = 1.5f * density)
     drawLine(Color(0x66FFFFFF), Offset(hairPx(), crf), Offset(hairPx(), sh - crf), strokeWidth = 1.5f * density)
     drawLine(Color(0x33000000), Offset(sw - hairPx() * 1.5f, crf), Offset(sw - hairPx() * 1.5f, sh - crf), strokeWidth = 1.5f * density)
-    drawRoundRect(Color(0x96EAF2F4), Offset(0f, 0f), Size(sw, sh), cr, style = Stroke(hairPx() * 1.4f))
+    drawRoundRect(lerp(shellTint, Color.White, 0.45f).copy(alpha = 0.62f), Offset(0f, 0f), Size(sw, sh), cr, style = Stroke(hairPx() * 1.4f))
 
     // ============ 10. 螺丝：四角 + 开口边中点；右侧两颗是红色塑料（结构图特征） ============
     val sr = sw * 0.020f
@@ -425,8 +495,8 @@ fun DrawScope.drawMechanism(w: Float, h: Float) {
     val sw = w
     val sh = h
     val hubX = sw * 0.5f
-    val topY = sh * 0.288f
-    val botY = sh * 0.712f
+    val topY = sh * HUB_V_TOP
+    val botY = sh * HUB_V_BOT
     val hubR = sw * HUB_R
 
     drawRoundRect(

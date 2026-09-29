@@ -1,7 +1,7 @@
-package com.workbuddy.duoman.ui
+package com.augustana.tfold.ui
 
 import androidx.compose.ui.geometry.Rect
-import com.workbuddy.duoman.ui.parts.CASSETTE_H_RATIO
+import com.augustana.tfold.ui.parts.CASSETTE_H_RATIO
 
 /** 单栏设计宽度（单位 dp，随屏幕等比缩放）。 */
 const val DESIGN_W = 197f

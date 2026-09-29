@@ -1,4 +1,4 @@
-package com.workbuddy.duoman.ui
+package com.augustana.tfold.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -29,10 +29,12 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Dp
-import com.workbuddy.duoman.machine.DuoMachine
-import com.workbuddy.duoman.model.Tape
-import com.workbuddy.duoman.ui.parts.drawCassette
-import com.workbuddy.duoman.ui.parts.hairPx
+import com.augustana.tfold.machine.DuoMachine
+import com.augustana.tfold.model.Tape
+import com.augustana.tfold.ui.parts.CASSETTE_IN_BOX
+import com.augustana.tfold.ui.parts.CASSETTE_IN_BOX_X
+import com.augustana.tfold.ui.parts.drawCassette
+import com.augustana.tfold.ui.parts.hairPx
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
@@ -205,12 +207,12 @@ private fun FlightLayer(machine: DuoMachine, density: Float) {
         clipPath(visible) {
             machine.incoming?.let { id ->
                 machine.tapeById(id)?.let { tape ->
-                    drawFlyingTape(tape, machine.flyIn.value, src, dst, density)
+                    drawFlyingTape(tape, machine.flyIn.value, src, dst, density, machine.tintFor(tape))
                 }
             }
             machine.outgoing?.let { id ->
                 machine.tapeById(id)?.let { tape ->
-                    drawFlyingTape(tape, machine.flyOut.value, src, dst, density)
+                    drawFlyingTape(tape, machine.flyOut.value, src, dst, density, machine.tintFor(tape))
                 }
             }
         }
@@ -232,6 +234,7 @@ private fun DrawScope.drawFlyingTape(
     src: Rect,
     dst: Rect,
     density: Float,
+    tint: Color,
 ) {
     val p2 = p.coerceIn(0f, 1f)
     val appear = 0.18f                              // 「出盒 / 回盒」阶段占比
@@ -239,14 +242,18 @@ private fun DrawScope.drawFlyingTape(
 
     val boxW = src.width
     val boxH = src.height
-    val rest = 0.76f                                // 躺在盒里时的尺寸（相对盒宽）
-    val restX = src.left + src.width * 0.60f        // 盒口内侧的模位一带
+    val rest = CASSETTE_IN_BOX                     // 躺在盒里时的尺寸（相对盒宽）
+    val restX = src.left + src.width * CASSETTE_IN_BOX_X   // 盒里的模位一带（盒腔模位按同一个数画）
     val lift = ramp(p2, 0f, appear) * 12f * density  // 出盒先抬一点，再飞
     val cx = mix(restX, dst.center.x, q)
     val cy = mix(src.center.y, dst.center.y, q) -
         lift - abs(dst.center.x - restX) * 0.12f * sin((PI * q).toFloat())
-    val sx = mix(rest, dst.width / boxW, q)
-    val sy = mix(rest, dst.height / boxH, q)
+    // 尺寸在**出盒那一段**就长到卡座尺寸 —— 这一段大半还被盖板挡着。
+    // 反过来（一路线性长大）会看到带子在半空里边飞边涨：两栏的尺度本来就不一样
+    // （卡位盒小、卡座井大），只能挑个看不见的地方把差值补掉。
+    val sQ = ramp(p2, 0f, appear * 1.6f)
+    val sx = mix(rest, dst.width / boxW, sQ)
+    val sy = mix(rest, dst.height / boxH, sQ)
 
     // 围绕磁带中心做旋转/缩放（translate 到中心 → rotate/scale → 平移回左上角）
     withTransform({
@@ -262,6 +269,7 @@ private fun DrawScope.drawFlyingTape(
             tapePos = 0f,
             angleTop = 0f,
             angleBot = 0f,
+            tint = tint,
         )
     }
 }

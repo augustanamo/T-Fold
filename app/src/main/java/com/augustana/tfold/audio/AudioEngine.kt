@@ -1,4 +1,4 @@
-package com.workbuddy.duoman.audio
+package com.augustana.tfold.audio
 
 import android.content.Context
 import android.media.AudioAttributes
@@ -8,7 +8,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import com.workbuddy.duoman.R
+import com.augustana.tfold.R
 
 /**
  * 音频引擎：本地音乐（MediaPlayer）+ 机械音效（SoundPool）。

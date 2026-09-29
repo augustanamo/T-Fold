@@ -1,4 +1,4 @@
-package com.workbuddy.duoman.ui
+package com.augustana.tfold.ui
 
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -38,9 +38,11 @@ import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
-import com.workbuddy.duoman.machine.DuoMachine
-import com.workbuddy.duoman.ui.parts.CASSETTE_H_RATIO
-import com.workbuddy.duoman.ui.parts.hairPx
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.rememberTextMeasurer
+import com.augustana.tfold.machine.DuoMachine
+import com.augustana.tfold.ui.parts.CASSETTE_H_RATIO
+import com.augustana.tfold.ui.parts.hairPx
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -118,6 +120,9 @@ fun AlbumsPane(
         val plusR = pad * 0.55f * u
 
         val scope = rememberCoroutineScope()
+        // 盒面 J 卡上的文字（目录号 / 艺术家 / 专辑 / 规格 / 轨数）要靠它量宽高。
+        // 必须在 composition 作用域里拿 —— Canvas 的 draw lambda 不是 @Composable。
+        val tm = rememberTextMeasurer()
 
         // page / frac 都用 MutableState **对象**保存，不用 `by` 局部委托：
         // 手势 lambda 的 keys 不含它们，重新组合时 lambda 不会重建，
@@ -234,7 +239,7 @@ fun AlbumsPane(
             // 在 draw 里读状态 → 只触发重绘，不引起重组
             drawAlbums(
                 machine, pageState.intValue, frac.floatValue, u, pw, cy, tw, th, railY,
-                holdIdx.intValue, holdP.floatValue,
+                holdIdx.intValue, holdP.floatValue, tm,
             )
             drawPlusButton(plusCx, plusCy, plusR)
         }
@@ -382,6 +387,7 @@ private fun DrawScope.drawAlbums(
     railY: Float,
     holdIdx: Int,
     holdP: Float,
+    tm: TextMeasurer,
 ) {
     // 卡位流：**远的先画**，中心的最后画（压在最上）。
     // 得画到 ±2：拖动进度能到整格（frac 0..±1），此时 ±1 那张已经居中、
@@ -421,7 +427,10 @@ private fun DrawScope.drawAlbums(
                     // 盒盖正在开 / 已开 —— 从合到开是连续的，不会再"先消失再出现"。
                     // `animateBox` 这一支是给"开度还是 0"那一帧用的：装带的带子是在
                     // 盒子还没动时就已经放进盒里（incoming 先置上），少了它开头会闪一个空框。
-                    drawCoverCard(tape, 0f, 0f, w, h, open, a * (1f - gone), machine.coverArt[tape.id])
+                    drawCoverCard(
+                        tape, 0f, 0f, w, h, open, a * (1f - gone), machine.coverArt[tape.id],
+                        tm, machine.trackCountOf(tape.id),
+                    )
                 } else if (away) {
                     // 磁带正飞往/飞离卡座，盒子又还没开始开 —— 卡位留一个精确的空框
                     drawRoundRect(
@@ -438,7 +447,10 @@ private fun DrawScope.drawAlbums(
                         ),
                     )
                 } else {
-                    drawCoverCard(tape, 0f, 0f, w, h, 0f, a * (1f - gone), machine.coverArt[tape.id])
+                    drawCoverCard(
+                        tape, 0f, 0f, w, h, 0f, a * (1f - gone), machine.coverArt[tape.id],
+                        tm, machine.trackCountOf(tape.id),
+                    )
                 }
             }
         }

@@ -1,4 +1,4 @@
-package com.workbuddy.duoman.ui
+package com.augustana.tfold.ui
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp

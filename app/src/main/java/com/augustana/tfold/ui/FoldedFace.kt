@@ -1,4 +1,4 @@
-package com.workbuddy.duoman.ui
+package com.augustana.tfold.ui
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -26,20 +26,20 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextMeasurer
-import com.workbuddy.duoman.machine.DuoMachine
-import com.workbuddy.duoman.machine.Transport
-import com.workbuddy.duoman.ui.parts.CASSETTE_H_RATIO
-import com.workbuddy.duoman.ui.parts.KeyKind
-import com.workbuddy.duoman.ui.parts.angleOf
-import com.workbuddy.duoman.ui.parts.drawCassette
-import com.workbuddy.duoman.ui.parts.drawGrille
-import com.workbuddy.duoman.ui.parts.drawKey
-import com.workbuddy.duoman.ui.parts.drawKnob
-import com.workbuddy.duoman.ui.parts.hair
-import com.workbuddy.duoman.ui.parts.hairPx
-import com.workbuddy.duoman.ui.parts.knobAngleFromValue
-import com.workbuddy.duoman.ui.parts.led
-import com.workbuddy.duoman.ui.parts.text
+import com.augustana.tfold.machine.DuoMachine
+import com.augustana.tfold.machine.Transport
+import com.augustana.tfold.ui.parts.CASSETTE_H_RATIO
+import com.augustana.tfold.ui.parts.KeyKind
+import com.augustana.tfold.ui.parts.angleOf
+import com.augustana.tfold.ui.parts.drawCassette
+import com.augustana.tfold.ui.parts.drawGrille
+import com.augustana.tfold.ui.parts.drawKey
+import com.augustana.tfold.ui.parts.drawKnob
+import com.augustana.tfold.ui.parts.hair
+import com.augustana.tfold.ui.parts.hairPx
+import com.augustana.tfold.ui.parts.knobAngleFromValue
+import com.augustana.tfold.ui.parts.led
+import com.augustana.tfold.ui.parts.text
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -263,6 +263,7 @@ private fun DrawScope.drawFoldedFace(
                 tapePos = machine.tapePos,
                 angleTop = machine.angleTop,
                 angleBot = machine.angleBot,
+                tint = machine.tintFor(tape),
             )
         }
     }

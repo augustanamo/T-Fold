@@ -1,4 +1,4 @@
-package com.workbuddy.duoman.ui.parts
+package com.augustana.tfold.ui.parts
 
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -64,6 +64,43 @@ fun DrawScope.label(
     align: Align = Align.Left,
     alpha: Float = 1f,
 ) = text(tm, s, x, cy, sizePx, color, letterSpacingPx = sizePx * 0.16f, align = align, alpha = alpha)
+
+/**
+ * 单行排不下就裁字接省略号。
+ *
+ * 盒面上的专辑名必须**一行**放下（磁带的 J 卡就是这么排的），但曲名长度是用户数据 ——
+ * 与其让它压到右边那行小字上，不如裁掉。逐字测量（名字都很短，代价可忽略），
+ * 不依赖 `TextMeasurer` 的 constraints 重载，版本无关。
+ */
+fun DrawScope.textClipped(
+    tm: TextMeasurer,
+    s: String,
+    x: Float,
+    cy: Float,
+    sizePx: Float,
+    color: Color,
+    maxWidth: Float,
+    letterSpacingPx: Float = 0f,
+    weight: FontWeight = FontWeight.Normal,
+    alpha: Float = 1f,
+): TextLayoutResult {
+    val st = TextStyle(
+        color = color,
+        fontSize = (sizePx / density).sp,
+        fontWeight = weight,
+        fontFamily = FontFamily.SansSerif,
+        letterSpacing = (letterSpacingPx / density).sp,
+    )
+    fun widthOf(t: String) = tm.measure(t, st).size.width.toFloat()
+    var shown = s
+    if (widthOf(shown) > maxWidth) {
+        while (shown.isNotEmpty() && widthOf("$shown…") > maxWidth) shown = shown.dropLast(1)
+        shown += "…"
+    }
+    val r = tm.measure(shown, st)
+    drawText(r, topLeft = Offset(x, cy - r.size.height / 2f), alpha = alpha)
+    return r
+}
 
 /** 凹槽：外深内浅的一道双线，用来表示"沉下去"的开口。 */
 fun DrawScope.engrave(x: Float, y: Float, w: Float, h: Float, r: Float, dark: Color, light: Color) {

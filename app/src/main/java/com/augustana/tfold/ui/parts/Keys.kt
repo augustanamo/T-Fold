@@ -1,11 +1,11 @@
-package com.workbuddy.duoman.ui.parts
+package com.augustana.tfold.ui.parts
 
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import com.workbuddy.duoman.ui.C
+import com.augustana.tfold.ui.C
 
 /** 五个功能键 —— 一套符号，不加图标底色，不写一个字。 */
 enum class KeyKind { REW, PLAY, PAUSE, FF, EJECT, REC }

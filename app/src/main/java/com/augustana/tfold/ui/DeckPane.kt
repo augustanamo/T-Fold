@@ -1,4 +1,4 @@
-package com.workbuddy.duoman.ui
+package com.augustana.tfold.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -25,11 +25,11 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
-import com.workbuddy.duoman.machine.DuoMachine
-import com.workbuddy.duoman.ui.parts.CASSETTE_H_RATIO
-import com.workbuddy.duoman.ui.parts.drawCassette
-import com.workbuddy.duoman.ui.parts.hairPx
-import com.workbuddy.duoman.ui.parts.led
+import com.augustana.tfold.machine.DuoMachine
+import com.augustana.tfold.ui.parts.CASSETTE_H_RATIO
+import com.augustana.tfold.ui.parts.drawCassette
+import com.augustana.tfold.ui.parts.hairPx
+import com.augustana.tfold.ui.parts.led
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -70,8 +70,11 @@ fun DeckPane(
         val wellW = wellR - wellL
         val wellH = wellB - wellT
 
-        // 磁带落座位：井内偏左，开口边朝右对着机构列
-        val cassW = minOf(wellW * 0.56f, wellH * 0.84f / CASSETTE_H_RATIO)
+        // 磁带落座位：井内偏左，开口边朝右对着机构列。
+        // 尺寸拉到井宽的 0.72（原来 0.56 显得"小一圈"）：带子右缘离上方磁头组的压带轮
+        // 只剩几十像素 —— 真机上带子就是贴着压带轮/主导轴那一列走的。
+        // 高度上限 0.86 井高只是兜底（1.56 的宽高比下先卡住的总是宽度）。
+        val cassW = minOf(wellW * 0.72f, wellH * 0.86f / CASSETTE_H_RATIO)
         val cassH = cassW * CASSETTE_H_RATIO
         val cassX = wellL + wellW * 0.40f - cassW / 2f
         val cassY = wellT + (wellH - cassH) / 2f
@@ -356,6 +359,7 @@ private fun DrawScope.drawDeck(
                     tapePos = machine.tapePos,
                     angleTop = machine.angleTop,
                     angleBot = machine.angleBot,
+                    tint = machine.tintFor(tape),
                 )
             }
         }

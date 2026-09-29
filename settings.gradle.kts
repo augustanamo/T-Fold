@@ -16,5 +16,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "DuoMan"
+rootProject.name = "TFold"
 include(":app")

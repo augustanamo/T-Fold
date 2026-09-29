@@ -1,4 +1,4 @@
-package com.workbuddy.duoman.ui.parts
+package com.augustana.tfold.ui.parts
 
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -6,7 +6,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
-import com.workbuddy.duoman.ui.C
+import com.augustana.tfold.ui.C
 import kotlin.math.cos
 import kotlin.math.sin
 

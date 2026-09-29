@@ -1,4 +1,4 @@
-package com.workbuddy.duoman
+package com.augustana.tfold
 
 import android.content.Context
 import android.content.pm.ActivityInfo
@@ -53,10 +53,10 @@ import androidx.window.area.WindowAreaPresentationSessionCallback
 import androidx.window.area.WindowAreaSessionPresenter
 import androidx.window.layout.FoldingFeature
 import androidx.window.layout.WindowInfoTracker
-import com.workbuddy.duoman.audio.AudioEngine
-import com.workbuddy.duoman.machine.DuoMachine
-import com.workbuddy.duoman.ui.DuoManScreen
-import com.workbuddy.duoman.ui.FoldedFace
+import com.augustana.tfold.audio.AudioEngine
+import com.augustana.tfold.machine.DuoMachine
+import com.augustana.tfold.ui.DuoManScreen
+import com.augustana.tfold.ui.FoldedFace
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch

@@ -14,3 +14,7 @@ app/build/
 app/release/
 *.apk
 *.aab
+
+# 签名密钥**故意提交**（见 app/build.gradle.kts 的 signingConfigs）：
+# 换机器 clone 下来打包，要能直接覆盖安装同一个 App，而不是"签名冲突先卸载"。
+!keystore/*.jks

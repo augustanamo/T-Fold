@@ -1,4 +1,4 @@
-package com.workbuddy.duoman.machine
+package com.augustana.tfold.machine
 
 import android.content.Context
 import android.content.ContentUris
@@ -27,13 +27,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
-import com.workbuddy.duoman.audio.AudioEngine
-import com.workbuddy.duoman.model.CoverStyle
-import com.workbuddy.duoman.model.Tape
-import com.workbuddy.duoman.model.TapeLibrary
-import com.workbuddy.duoman.model.UserTapePalettes
-import com.workbuddy.duoman.model.UserTapeStyles
-import com.workbuddy.duoman.ui.mix
+import androidx.compose.ui.graphics.toPixelMap
+import com.augustana.tfold.audio.AudioEngine
+import com.augustana.tfold.model.CoverStyle
+import com.augustana.tfold.model.Tape
+import com.augustana.tfold.model.TapeLibrary
+import com.augustana.tfold.model.UserTapePalettes
+import com.augustana.tfold.model.UserTapeStyles
+import com.augustana.tfold.ui.mix
+import com.augustana.tfold.ui.parts.shellTintOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -57,6 +59,12 @@ private const val R_MAX = 0.325f      // 满卷带盘半径（相对带盒宽度
 private const val R_MIN = 0.150f      // 空卷带盘半径
 private const val BASE_OMEGA = 3.4f   // 满盘时的角速度 rad/s
 private const val WIND_RATE = 18f     // 快进/快退倍速（相对走带）
+
+/**
+ * 旋钮 / 音量键能拧到的最大档位 = 系统最大音量的 **80%**。
+ * 真机电位器拧到头也不该把功放推到削顶，留两成余量；旋钮的 0..1 一律映射到 0..cap。
+ */
+private const val VOLUME_CAP = 0.80f
 
 /**
  * Duo-Man 状态机。
@@ -179,6 +187,18 @@ class DuoMachine(
     var coverArt by mutableStateOf<Map<String, ImageBitmap>>(emptyMap())
         private set
 
+    /**
+     * 磁带 id → **封面主色**（透明壳的色相来源）。
+     *
+     * 抽一次就缓存：清壳带本身无色，它的色是封面透过塑料染上来的 ——
+     * 所以每盘带该有自己的颜色，而这件事只有拿着封面位图时才算得出来。
+     */
+    var coverTint by mutableStateOf<Map<String, Color>>(emptyMap())
+        private set
+
+    /** 这盘带清壳的色：有封面主色用它，否则退回盒面配色 / 带子 id（见 [shellTintOf]）。 */
+    fun tintFor(tape: Tape): Color = shellTintOf(tape, coverTint[tape.id])
+
     /** 磁带库中「当前卡位」在根坐标系里的矩形，用于飞行起点。 */
     var cardRect by mutableStateOf<Rect?>(null)
 
@@ -228,6 +248,13 @@ class DuoMachine(
     var volume by mutableStateOf(0.85f)
         private set
 
+    /** 上一次落到系统音量上的档位 —— 跨档才写系统音量、才给那一下轻响。 */
+    private var lastVolumeStep = -1
+
+    /** 系统媒体音量的最大档位（已按 [VOLUME_CAP] 收过）。 */
+    private fun volumeCapStep(max: Int) =
+        (max * VOLUME_CAP).roundToInt().coerceIn(1, max)
+
     // ---- 不外露的物理量，只驱动 Canvas 绘制（必须是 snapshot 状态，否则转动不触发重绘） ----
     var angleTop by mutableStateOf(0f)
         private set
@@ -258,9 +285,14 @@ class DuoMachine(
         prefs.getString("loaded", null)?.let { id -> tapes.firstOrNull { it.id == id } }?.let { loadedId = it.id }
         virtualMs = prefs.getFloat("posMs", 0f)
 
-        // 旋钮初始位置 = 系统媒体音量的当前位置，不能凭空定在 0.85
+        // 旋钮初始位置 = 系统媒体音量的当前位置（换算到 0.8 满刻度），不能凭空定在 0.85
         val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        if (max > 0) volume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) / max.toFloat()
+        if (max > 0) {
+            val cap = volumeCapStep(max)
+            volume = (audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / cap)
+                .coerceIn(0f, 1f)
+            lastVolumeStep = (volume * cap).roundToInt()
+        }
     }
 
     /** 装带状态落盘：搬屏重建 Activity 后恢复「哪盘带在卡座里、走到哪」。 */
@@ -275,14 +307,14 @@ class DuoMachine(
      * 删除这种不可撤销的动作必须有手感：起手一下轻的（长按咬住了）、
      * 计时中一直嗡嗡的（还没松手就还来得及）、落定一下沉的（带子真没了）。
      */
-    private fun buzz(timings: LongArray, repeat: Int = -1) {
+    private fun buzz(timings: LongArray, repeat: Int = -1, amplitude: Int = VibrationEffect.DEFAULT_AMPLITUDE) {
         val v = vibrator ?: return
         if (!v.hasVibrator()) return
         runCatching {
             v.vibrate(
                 VibrationEffect.createWaveform(
                     timings,
-                    IntArray(timings.size) { VibrationEffect.DEFAULT_AMPLITUDE },
+                    IntArray(timings.size) { amplitude },
                     repeat,
                 )
             )
@@ -291,6 +323,9 @@ class DuoMachine(
 
     /** 手指按住卡位那一刻的「嗒」。 */
     fun buzzHold() = buzz(longArrayOf(0, 12))
+
+    /** 音量过一档的「嗒」—— 旋钮拧起来那种细密的段落感，比长按那下轻得多。 */
+    fun buzzClick() = buzz(longArrayOf(0, 8), amplitude = 76)
 
     /**
      * 删除计时**一直响着**：短促的连续脉冲（20ms 振 / 42ms 停）循环到松手或落定。
@@ -318,17 +353,70 @@ class DuoMachine(
         val uriPart = first.substringBeforeLast('|', first)
         if (uriPart.isBlank()) return
         scope.launch {
-            val art = withContext(Dispatchers.IO) {
+            // 封面图和它的主色一起算：主色是"透明壳的色"，只在这一处能看到全图像素
+            val pair = withContext(Dispatchers.IO) {
                 runCatching {
                     val mmr = MediaMetadataRetriever()
                     mmr.setDataSource(app, Uri.parse(uriPart))
                     val bytes = mmr.embeddedPicture
                     runCatching { mmr.release() }
-                    bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() }
+                    bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }?.let { bmp ->
+                        val image = bmp.asImageBitmap()
+                        image to dominantColorOf(image)
+                    }
                 }.getOrNull()
             }
-            if (art != null) coverArt = coverArt + (tapeId to art)
+            if (pair != null) {
+                coverArt = coverArt + (tapeId to pair.first)
+                pair.second?.let { coverTint = coverTint + (tapeId to it) }
+            }
         }
+    }
+
+    /**
+     * 封面主色 —— 透明壳的色相来源。
+     *
+     * 做法是**按色相分桶再挑最重的那一族**，而不是对全图求平均：
+     * 平均下来一半的封面都是灰褐色，等于没算。桶权重取 `饱和度 × 明度`
+     * （灰的、黑的、白的都压到接近 0），采样按长边缩到 ~48 步，代价可以忽略。
+     *
+     * 全灰的封面（黑白专封）返回 null —— 由 [shellTintOf] 按带子 id 补一个色相。
+     */
+    private fun dominantColorOf(bmp: ImageBitmap): Color? {
+        val pm = runCatching { bmp.toPixelMap() }.getOrNull() ?: return null
+        if (pm.width <= 0 || pm.height <= 0) return null
+        val step = maxOf(1, maxOf(pm.width, pm.height) / 48)
+        val hsv = FloatArray(3)
+        val weight = FloatArray(12)
+        val rAcc = FloatArray(12)
+        val gAcc = FloatArray(12)
+        val bAcc = FloatArray(12)
+        var y = 0
+        while (y < pm.height) {
+            var x = 0
+            while (x < pm.width) {
+                val c = pm[x, y]
+                val argb = c.toArgb()
+                if ((argb ushr 24) / 255f > 0.5f) {
+                    android.graphics.Color.colorToHSV(argb, hsv)
+                    // 只认"有颜色、不暗不死"的像素：饱和 > 0.15、明度在 0.12..0.97
+                    if (hsv[1] > 0.15f && hsv[2] > 0.12f && hsv[2] < 0.97f) {
+                        val bin = (hsv[0] / 30f).toInt().coerceIn(0, 11)
+                        val wgt = hsv[1] * hsv[2]
+                        weight[bin] += wgt
+                        rAcc[bin] += c.red * wgt
+                        gAcc[bin] += c.green * wgt
+                        bAcc[bin] += c.blue * wgt
+                    }
+                }
+                x += step
+            }
+            y += step
+        }
+        val best = (0..11).maxByOrNull { weight[it] } ?: return null
+        val w = weight[best]
+        if (w <= 0f) return null
+        return Color(rAcc[best] / w, gAcc[best] / w, bAcc[best] / w, 1f)
     }
 
     /**
@@ -338,25 +426,28 @@ class DuoMachine(
      * 系统媒体音量（没放磁带时也真实有效），同时同步给 MediaPlayer 做细调。
      */
     fun adjustVolume(v: Float) {
+        val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+        val cap = volumeCapStep(max)
         volume = v.coerceIn(0f, 1f)
         audio.setVolume(volume)
-        val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        audioManager.setStreamVolume(
-            AudioManager.STREAM_MUSIC,
-            (volume * max).roundToInt().coerceIn(0, max),
-            0,
-        )
+        val step = (volume * cap).roundToInt().coerceIn(0, cap)
+        if (step != lastVolumeStep) {
+            // 只在**跨过一档**时落到系统音量上 —— 顺带给出那一下轻微的段落手感
+            lastVolumeStep = step
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, step, 0)
+            buzzClick()
+        }
     }
 
     /**
      * 音量键短按一格。
      *
-     * 一格 = 系统媒体音量的**一档**（1 / max），不是固定百分比 ——
+     * 一格 = 系统媒体音量的**一档**（1 / cap），不是固定百分比 ——
      * 这样按键和系统音量条逐格对齐，拧旋钮与按音量键走的是同一个量。
      */
     fun nudgeVolume(up: Boolean) {
         val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
-        adjustVolume(volume + (if (up) 1f else -1f) / max)
+        adjustVolume(volume + (if (up) 1f else -1f) / volumeCapStep(max))
     }
 
     /**
@@ -471,6 +562,7 @@ class DuoMachine(
                 .apply()
             assigned = assigned - id
             coverArt = coverArt - id
+            coverTint = coverTint - id
 
             // 焦点跟着挪：删的那盘在当前之前 → 前移一格；就是当前那盘 → 停在原处（露出后一盘）
             val keep = (if (index > i) index - 1 else index).coerceIn(0, next.lastIndex)
