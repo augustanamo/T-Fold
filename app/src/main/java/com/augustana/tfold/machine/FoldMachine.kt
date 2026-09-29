@@ -64,6 +64,16 @@ private val AUDIO_PERMISSION: String =
 private const val R_MAX = 0.325f      // 满卷带盘半径（相对带盒宽度）
 private const val R_MIN = 0.150f      // 空卷带盘半径
 private const val BASE_OMEGA = 3.4f   // 满盘时的角速度 rad/s
+
+/**
+ * 轮毂**显示**转角 = 物理转角 × 这个倍数。
+ *
+ * 恒线速是真的：满盘 0.325 时 ω = 3.4 rad/s ≈ 0.54 转/秒 —— 真实带子就是这么慢
+ * （4.76 cm/s ÷ 20.7 mm 满盘半径 = 2.3 rad/s，我们这里还偏快一点）。但屏幕上
+ * 读起来就是"中间没在转"。所以只放大**看到的**转角：积分与计数器仍走真实转数，
+ * 按带子走带量算出来的计数不受影响。
+ */
+private const val SPIN_GAIN = 2.2f
 private const val WIND_RATE = 18f     // 快进/快退倍速（相对走带）
 
 /**
@@ -298,6 +308,14 @@ class FoldMachine(
 
     var angleBot by mutableStateOf(0f)
         private set
+
+    /**
+     * 送给画布的**显示**转角：物理转角 × [SPIN_GAIN]。
+     * 画带的只有这两条 —— 别直接读 [angleTop] / [angleBot]（那是按真实线速度积出来的，
+     * 满盘时慢到看不清在转）。
+     */
+    val spinTop: Float get() = angleTop * SPIN_GAIN
+    val spinBot: Float get() = angleBot * SPIN_GAIN
 
     private var virtualMs = 0f
     private var hintToken = 0

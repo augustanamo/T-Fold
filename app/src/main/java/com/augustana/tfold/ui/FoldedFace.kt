@@ -19,22 +19,27 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextMeasurer
 import com.augustana.tfold.machine.FoldMachine
 import com.augustana.tfold.machine.Transport
 import com.augustana.tfold.ui.parts.CASSETTE_H_RATIO
 import com.augustana.tfold.ui.parts.KeyKind
+import com.augustana.tfold.ui.parts.WellLayout
 import com.augustana.tfold.ui.parts.angleOf
-import com.augustana.tfold.ui.parts.drawCassette
+import com.augustana.tfold.ui.parts.deckWeaveBrush
 import com.augustana.tfold.ui.parts.drawGrille
 import com.augustana.tfold.ui.parts.drawKey
 import com.augustana.tfold.ui.parts.drawKnob
+import com.augustana.tfold.ui.parts.drawWellInterior
 import com.augustana.tfold.ui.parts.hair
 import com.augustana.tfold.ui.parts.hairPx
 import com.augustana.tfold.ui.parts.knobAngleFromValue
@@ -73,8 +78,11 @@ fun FoldedFace(
             label = "knob",
         )
 
+        // 窗底织纹：和内屏卡座井底同一块瓦片，建一次复用（每帧建瓦片 = 每帧一张 ImageBitmap）
+        val weave = remember { deckWeaveBrush() }
+
         Canvas(Modifier.fillMaxSize()) {
-            drawFoldedFace(machine, tm, w, h, m, pressed, knob.value)
+            drawFoldedFace(machine, tm, w, h, m, pressed, knob.value, weave)
         }
 
         // 一层的指针处理同时管两件事 —— 分成两层的话，上面那层会把按下事件消费掉，
@@ -194,6 +202,21 @@ class FoldMetric(val w: Float, val h: Float) {
     /** 竖排键左侧的指示轨 x。 */
     val railX = keyX - w * 0.020f
 
+    /**
+     * **面板上那个洞**（= 井口）。
+     *
+     * 卡座不是画在"窗"里的：它整块垫在面板底下（[drawFoldedFace] 的第 0 层），
+     * 面板在这块地方开一个洞，洞里的卡座自然露出来 —— 合上盖子只是给同一个卡座
+     * 盖了块开了洞的面板，机器本身没换、比例也没动。
+     */
+    val winL = winX - w * 0.020f
+    val winT = winY - w * 0.020f
+    val winRW = winW + w * 0.040f
+    val winRH = winH + w * 0.040f
+
+    /** 洞口的圆角：这是**面板**铣出来的口，不是井的圆角（井比洞大得多）。 */
+    val winRadius = w * 0.0126f
+
     fun keyRect(i: Int): Rect {
         val top = stripTop + i * (keySize + keyGap)
         return Rect(keyX, top, keyX + keySize, top + keySize)
@@ -217,19 +240,85 @@ private fun DrawScope.drawFoldedFace(
     m: FoldMetric,
     pressed: Int,
     knobY: Float,
+    weave: Brush,
 ) {
     val tape = machine.loadedTape
 
-    // 机身 + 一道内凹边框
-    drawRoundRect(C.Porcelain, Offset(0f, 0f), Size(w, h), CornerRadius(12f * density))
-    drawRoundRect(
-        C.Paper, Offset(m.inset * 0.55f, m.inset * 0.55f),
-        Size(w - m.inset * 1.1f, h - m.inset * 1.1f), CornerRadius(9f * density),
+    // 井口 = 面板上那个洞。**洞只是"开了个口"**：井的尺寸由屏定（= 内屏卡座栏里那口井
+    // 的比例，井占栏宽的 0.837、栏高的 0.866），带子中心对着洞心 —— 井比洞大，
+    // 从洞里看到的是这台机器中间被裁出来的一块。拿洞去定井的尺寸（井 = 洞）等于
+    // 整台机器跟着洞缩了一圈，那就不叫"合盖"了。
+    val hole = Rect(m.winL, m.winT, m.winL + m.winRW, m.winT + m.winRH)
+    val well = WellLayout.centred(
+        wellW = w * 0.837f,
+        wellH = h * 0.866f,
+        casCx = hole.center.x,
+        casCy = hole.center.y,
     )
-    drawRoundRect(
-        C.Hair, Offset(m.inset * 0.55f, m.inset * 0.55f),
-        Size(w - m.inset * 1.1f, h - m.inset * 1.1f),
-        CornerRadius(9f * density), style = Stroke(hairPx()),
+    val winR = CornerRadius(m.winRadius)
+    val holePath = Path().apply { addRoundRect(RoundRect(hole, winR)) }
+
+    // ============ 0. 垫在最底下的那台机器：门板 + 卡座井 ============
+    //
+    // 层序是这台机器的真实层序：卡座在最里，外面才是那块开了洞的面板。
+    // 所以先整块铺底（门板 + 井 + 机构 + 带子），再把面板盖上去 ——
+    // 面板中间那个洞里的内容**不是"画进窗里的"，是本来就躺在那儿、从洞里露出来的**。
+    // （反过来做 —— 先画面板、再往窗里塞一套按窗宽重排的机构 —— 内外屏就是两台机器。）
+    drawRect(C.DoorBlack, Offset.Zero, Size(w, h))
+    drawRect(weave, Offset.Zero, Size(w, h))
+    drawWellInterior(
+        L = well,
+        weave = weave,
+        tape = tape,
+        tapePos = machine.tapePos,
+        angleTop = machine.spinTop,
+        angleBot = machine.spinBot,
+        tint = tape?.let { machine.tintFor(it) },
+        shadowOffset = w * 0.0008f,
+    )
+
+    // ============ 1. 面板：瓷白机身，中间给井留一个洞 ============
+    //
+    // 用 EvenOdd 的 Path 挖洞，而不是"画满再画一块深色矩形" —— 后者等于把卡座又盖回去了，
+    // 而且那块深色的圆角/边缘会和井口的圆角对不上，露出一圈缝。
+    val body = Path().apply {
+        fillType = PathFillType.EvenOdd
+        addRoundRect(RoundRect(0f, 0f, w, h, CornerRadius(12f * density)))
+        addRoundRect(RoundRect(hole, winR))
+    }
+    drawPath(body, C.Porcelain)
+    val paper = Path().apply {
+        fillType = PathFillType.EvenOdd
+        addRoundRect(
+            RoundRect(
+                m.inset * 0.55f, m.inset * 0.55f,
+                w - m.inset * 0.55f, h - m.inset * 0.55f, CornerRadius(9f * density),
+            ),
+        )
+        addRoundRect(RoundRect(hole, winR))
+    }
+    drawPath(paper, C.Paper)
+    drawPath(
+        Path().apply {
+            addRoundRect(
+                RoundRect(
+                    m.inset * 0.55f, m.inset * 0.55f,
+                    w - m.inset * 0.55f, h - m.inset * 0.55f, CornerRadius(9f * density),
+                ),
+            )
+        },
+        C.Hair, style = Stroke(hairPx()),
+    )
+
+    // 洞口那一圈"铣边"：面板是有厚度的，口的内壁得有一道影 + 外缘一道受光，
+    // 底缘再补一线受光（井自己那道底光在洞外，看不见了 —— 露出来的这段得有自己的）。
+    drawPath(holePath, Color(0x59000000), style = Stroke(3f * density))
+    drawPath(holePath, Color(0x33FFFFFF), style = Stroke(hairPx()))
+    drawLine(
+        Color(0x1FFFFFFF),
+        Offset(hole.left + winR.x, hole.bottom - hairPx() * 2f),
+        Offset(hole.right - winR.x, hole.bottom - hairPx() * 2f),
+        strokeWidth = hairPx() * 2f,
     )
 
     // 扬声器栅（顶带左段，左对齐）
@@ -239,37 +328,9 @@ private fun DrawScope.drawFoldedFace(
     drawKnobScale(m.knobCx, m.knobCy, m.knobR)
     drawKnob(m.knobCx, m.knobCy, m.knobR, knobAngleFromValue(machine.volume))
 
-    // 磁带窗：全屏唯一深色块
-    val padX = w * 0.020f
-    drawRoundRect(
-        C.Shade, Offset(m.winX + w * 0.005f, m.winY + w * 0.008f),
-        Size(m.winW + padX * 2f, m.winH + padX * 2f), CornerRadius(6f * density),
-    )
-    drawRoundRect(
-        C.Recess, Offset(m.winX - padX, m.winY - padX),
-        Size(m.winW + padX * 2f, m.winH + padX * 2f), CornerRadius(6f * density),
-    )
-    drawRoundRect(
-        Color(0x33FFFFFF), Offset(m.winX - padX, m.winY - padX),
-        Size(m.winW + padX * 2f, m.winH + padX * 2f),
-        CornerRadius(6f * density), style = Stroke(hairPx()),
-    )
-    if (tape != null) {
-        translate(m.winX, m.winY) {
-            drawCassette(
-                w = m.winW,
-                h = m.winH,
-                tape = tape,
-                tapePos = machine.tapePos,
-                angleTop = machine.angleTop,
-                angleBot = machine.angleBot,
-                tint = machine.tintFor(tape),
-            )
-        }
-    }
-    // 没装曲目：窗口右上角一颗安全橙警示灯
+    // 没装曲目：井口右上角一颗安全橙警示灯（位置照内屏卡座门板上那颗 —— 都在井口角上）
     led(
-        m.winX + m.winW + padX * 0.4f, m.winY - padX * 0.35f, w * 0.0080f,
+        hole.right - well.corner * 2.6f, hole.top + well.corner * 2.0f, w * 0.0080f,
         on = tape != null && !machine.hasAudio(tape.id),
     )
 

@@ -9,11 +9,14 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
 import com.augustana.tfold.model.BLANK_TAPE_ID
@@ -164,6 +167,72 @@ data class CassetteStyle(
 private fun rrPath(x: Float, y: Float, w: Float, h: Float, r: Float): Path =
     Path().apply { addRoundRect(androidx.compose.ui.geometry.RoundRect(x, y, x + w, y + h, r, r)) }
 
+/** 单调链求凸包（逆时针，去掉共线点 —— 纯横/纯竖挤出会退化成矩形，正好靠它合并）。 */
+private fun convexHull(pts: List<Offset>): List<Offset> {
+    if (pts.size < 3) return pts
+    val sorted = pts.sortedWith(compareBy({ it.x }, { it.y }))
+    fun cross(o: Offset, a: Offset, b: Offset) =
+        (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+    val lower = ArrayList<Offset>()
+    for (q in sorted) {
+        while (lower.size >= 2 && cross(lower[lower.size - 2], lower.last(), q) <= 0f) lower.removeAt(lower.size - 1)
+        lower.add(q)
+    }
+    val upper = ArrayList<Offset>()
+    for (q in sorted.asReversed()) {
+        while (upper.size >= 2 && cross(upper[upper.size - 2], upper.last(), q) <= 0f) upper.removeAt(upper.size - 1)
+        upper.add(q)
+    }
+    lower.removeAt(lower.size - 1)
+    upper.removeAt(upper.size - 1)
+    return lower + upper
+}
+
+/**
+ * 挤出体的**真外轮廓**：正面圆角矩形 R 与它平移 (dx,dy) 后的副本 R′ 的凸包
+ * （圆角矩形是凸的 → 并集的边界就是凸包边界）。
+ *
+ * 这一步很关键，别退回"把圆角矩形平移一份当轮廓"：
+ * 那样右 / 下转角处会咬掉一块缺口，看着像**后面还压着一片没对齐的玻璃** ——
+ * 用户说的"像两片构成的三维"就是从这儿来的。
+ *
+ * 做法：取两个"圆角圆心矩形"的 8 个角点求凸包（得到六边形，纯横/纯竖时退化成矩形），
+ * 再用二次贝塞尔在顶点倒圆 —— 倒出来的就是圆角矩形的挤出体，四条斜棱一步不差。
+ */
+private fun extrudeHull(sw: Float, sh: Float, r: Float, dx: Float, dy: Float): Path {
+    val x0 = r; val x1 = sw - r; val y0 = r; val y1 = sh - r
+    val h = convexHull(
+        listOf(
+            Offset(x0, y0), Offset(x1, y0), Offset(x1, y1), Offset(x0, y1),
+            Offset(x0 + dx, y0 + dy), Offset(x1 + dx, y0 + dy),
+            Offset(x1 + dx, y1 + dy), Offset(x0 + dx, y1 + dy),
+        ),
+    )
+    val path = Path()
+    if (h.size < 3) {
+        path.addRoundRect(RoundRect(0f, 0f, sw, sh, r, r))
+        return path
+    }
+    val n = h.size
+    for (i in 0 until n) {
+        val prev = h[(i - 1 + n) % n]
+        val cur = h[i]
+        val next = h[(i + 1) % n]
+        val d1 = cur - prev
+        val d2 = next - cur
+        val l1 = d1.getDistance()
+        val l2 = d2.getDistance()
+        if (l1 < 1e-3f || l2 < 1e-3f) continue
+        val t = minOf(r, 0.42f * l1, 0.42f * l2)
+        val a = cur - d1 / l1 * t
+        val b = cur + d2 / l2 * t
+        if (i == 0) path.moveTo(a.x, a.y) else path.lineTo(a.x, a.y)
+        path.quadraticBezierTo(cur.x, cur.y, b.x, b.y)
+    }
+    path.close()
+    return path
+}
+
 /**
  * 画一盘竖放的磁带：供带盘在上、收带盘在下（与 TFold 卡座一致）。
  *
@@ -181,6 +250,15 @@ fun DrawScope.drawCassette(
     style: CassetteStyle = CassetteStyle.InRecess,
     /** 这盘带的清壳色（= 封面主色）。null 就按盒面配色 / 带子 id 推。 */
     tint: Color? = null,
+    /**
+     * 立体挤出：**侧壁相对正面的位移**（像素，右 / 下为正）。
+     *
+     * 0 = 纯平面（卡座里正面朝我们时就是它）。飞行路上给非零值，带子就成了
+     * 一块有厚度的塑料 —— 正面与侧壁的交界处那道"折过来的边"是立体感的全部来源。
+     * 两个值分开给，是因为"绕竖轴转"露出的是**右**侧壁、"略俯视"露出的是**底**缘。
+     */
+    depthX: Float = 0f,
+    depthY: Float = 0f,
 ) {
     val sw = w
     val sh = h
@@ -216,7 +294,57 @@ fun DrawScope.drawCassette(
     val winY = topY + cutR + sh * 0.006f
     val winH = (botY - cutR) - winY - sh * 0.006f
 
+    // 侧壁露出的方向（右 / 下 = 正）—— 那两条边是"正面与侧壁的接缝"，
+    // 绝不能再描亮边（描了就等于把正面切出来单成一片）。
+    val wallR = depthX > 0f
+    val wallD = depthY > 0f
+
+    // ============ 0. 壳体厚度：透明亚克力的**侧壁**，不是一块暗塑料 ============
+    //
+    // 照透明带实拍（清壳带在棚里转）：亚克力的**棱**迎光最亮 —— 一条白线，往里一档还有
+    // 一道内反射线，中间是淡淡一层奶色，底下的零件照样透过来。反过来用暗色去堆体积，
+    // 叠出来就是一块实心塑料，"透明壳"立刻变回"实体块"。
+    //
+    // 光有这些还不够。第一版还犯了两个错，**两个都会让带子读成"两片玻璃"**：
+    //   ① 给每一层中间副本都描了边 —— 一层层平行的轮廓线，像好几张玻璃片摞着；
+    //   ② 正面自己的轮廓还留着一条暗线 / 一圈亮玻璃环。于是"正面"和"远端"各有一条
+    //      完整亮边、中间夹一道黑缝 —— 这正好就是用户看到的那两片。
+    // 所以现在：中间层**只填色、绝不描边**；正面的玻璃边只在"没有被侧壁接续"的那几条
+    // 边上画（见第 9 节）；远端轮廓用挤出体的**真外轮廓**（[extrudeHull]）接出四条斜棱。
+    if (depthX != 0f || depthY != 0f) {
+        val hull = extrudeHull(sw, sh, crf, depthX, depthY)
+        // 壁 = 挤出体 − 正面矩形（正面是透明的，料只该落在这一圈侧壁里）
+        val wall = Path.combine(
+            PathOperation.Intersect,
+            Path.combine(
+                PathOperation.Difference,
+                Path().apply { addRect(Rect(-sw * 6f, -sh * 6f, sw * 7f, sh * 7f)) },
+                shellPath,
+            ),
+            hull,
+        )
+        clipPath(wall) {
+            // 一层层同形状的透明薄片叠出"料"（只填色；描边会画出平行轮廓 = 多片玻璃）
+            val steps = 10
+            for (i in steps downTo 1) {
+                drawPath(
+                    rrPath(depthX * i / steps, depthY * i / steps, sw, sh, crf),
+                    lerp(shellTint, Color.White, 0.62f).copy(alpha = 0.05f),
+                )
+            }
+            // 靠远端内侧一点"材料感"：宽而极淡的一圈，替掉原来那道平行的内轮廓线
+            drawPath(hull, Color(0x14FFFFFF), style = Stroke(4.5f * density))
+        }
+        // 远端外缘亮线：亚克力的棱迎光就是一条白线，立体感全靠它
+        drawPath(hull, Color(0xC4FFFFFF), style = Stroke(1.35f * density))
+    }
+
     // ============ 1. 壳内零件（清壳 → 全部可见） ============
+    //
+    // 整组零件**往"里"推半个厚度**（depthX/Y 的 0.45）：斜看时，壳里的东西本来就该
+    // 相对正面壳偏一点 —— 这点视差是"壳是空的"最直接的证据，和不偏移的正面壳一起看，
+    // 一眼就能读出中间夹着一层空气。
+    translate(depthX * 0.45f, depthY * 0.45f) {
     tapePack(hubX, topY, rTop, style, angleTop)
     hub(hubX, topY, hubR, angleTop, style)
     tapePack(hubX, botY, rBot, style, angleBot)
@@ -302,6 +430,7 @@ fun DrawScope.drawCassette(
         Color(0x2EFFFFFF), Offset(stripX, stripTop), Size(stripW, stripBot - stripTop),
         CornerRadius(sw * 0.020f), style = Stroke(hairPx()),
     )
+    }   // ← 壳内零件到此（视差平移收尾）
 
     // ============ 5. 磨砂清壳覆层：让零件“陷进”塑料里 ============
     //  清壳本身无色 —— 这层是**塑料被封面染上的那点色**，每盘带都不一样。
@@ -340,31 +469,73 @@ fun DrawScope.drawCassette(
     }
 
     // ============ 9. 壳体厚度：底缘侧壁刻面 + 青色透光（例图里壳底最亮） ============
+    //
+    // 正面平看时，"壁厚"就是外缘之内那一窄条：外缘一圈**亮玻璃边**（约 1.4% 宽，
+    // 描边一半被裁在壳外，于是留在壳内的正是"壁"），往里一档一道内壁线；
+    // 中间那点材料靠底缘这道渐变交代（透明亚克力的边迎光最亮）。
+    //
+    // **挤出时右 / 下那两条边必须让开**：它们是正面与侧壁的接缝，在那儿收一道亮边
+    // 就等于把正面切出来单成一片玻璃（用户看到的"两片构成的三维"）。
+    // 用 clipRect 把那两条边裁掉，正面的边直接化进侧壁里。
+    val seam = sw * 0.014f                       // = 玻璃边宽的一半（等于留在壳内的壁厚）
+    val faceClipR = sw - if (wallR) seam else 0f
+    val faceClipB = sh - if (wallD) seam else 0f
     clipPath(shellPath) {
-        drawRect(
-            Brush.verticalGradient(
-                0f to Color.Transparent,
-                0.55f to Color(0x2EFFFFFF),
-                1f to glow.copy(alpha = 0.55f),
-            ),
-            Offset(0f, sh - sw * 0.05f), Size(sw, sw * 0.05f),
-        )
-        val facets = 12
-        for (i in 1 until facets) {
-            val fx = sw * i / facets
-            drawLine(Color(0x24FFFFFF), Offset(fx, sh - sw * 0.040f), Offset(fx, sh - hairPx()), strokeWidth = hairPx())
+        clipRect(0f, 0f, faceClipR, faceClipB) {
+            drawRoundRect(
+                Color(0x1FFFFFFF), Offset.Zero, Size(sw, sh), cr,
+                style = Stroke(sw * 0.028f),
+            )
+        }
+        // 内壁线只在完全平看时画（挤出时远端轮廓已经把"一壁之厚"说清楚了）
+        if (!wallR && !wallD) {
+            drawPath(
+                rrPath(sw * 0.014f, sh * 0.011f, sw * 0.972f, sh * 0.978f, crf * 0.82f),
+                Color(0x26FFFFFF), style = Stroke(hairPx()),
+            )
+        }
+        // 底缘侧壁刻面同理：正面底边一旦是接缝，这一圈就得让给侧壁
+        if (!wallD) {
+            drawRect(
+                Brush.verticalGradient(
+                    0f to Color.Transparent,
+                    0.55f to Color(0x2EFFFFFF),
+                    1f to glow.copy(alpha = 0.55f),
+                ),
+                Offset(0f, sh - sw * 0.05f), Size(sw, sw * 0.05f),
+            )
+            val facets = 12
+            for (i in 1 until facets) {
+                val fx = sw * i / facets
+                drawLine(Color(0x24FFFFFF), Offset(fx, sh - sw * 0.040f), Offset(fx, sh - hairPx()), strokeWidth = hairPx())
+            }
         }
     }
-    // 底缘青光：内缘叠两道亮线
-    drawLine(glow.copy(alpha = 0.85f), Offset(crf, sh - hairPx() * 1.5f), Offset(sw - crf, sh - hairPx() * 1.5f), strokeWidth = 1.5f * density)
-    drawLine(glow.copy(alpha = 0.40f), Offset(hairPx() * 1.5f, sh * 0.70f), Offset(hairPx() * 1.5f, sh - crf), strokeWidth = 1.2f * density)
-    drawLine(glow.copy(alpha = 0.40f), Offset(sw - hairPx() * 1.5f, sh * 0.70f), Offset(sw - hairPx() * 1.5f, sh - crf), strokeWidth = 1.2f * density)
+    // 底缘青光：内缘叠两道亮线（底缘是接缝时整条让开）
+    if (!wallD) {
+        drawLine(glow.copy(alpha = 0.85f), Offset(crf, sh - hairPx() * 1.5f), Offset(sw - crf, sh - hairPx() * 1.5f), strokeWidth = 1.5f * density)
+        drawLine(glow.copy(alpha = 0.40f), Offset(hairPx() * 1.5f, sh * 0.70f), Offset(hairPx() * 1.5f, sh - crf), strokeWidth = 1.2f * density)
+    }
+    if (!wallR) {
+        drawLine(glow.copy(alpha = 0.40f), Offset(sw - hairPx() * 1.5f, sh * 0.70f), Offset(sw - hairPx() * 1.5f, sh - crf), strokeWidth = 1.2f * density)
+    }
 
-    // 常规轮廓：受光侧亮缘、背光侧暗缘
+    // 常规轮廓：四缘都是**玻璃边**（透明壳的边迎光发亮，不该有一侧是黑的）。
+    // 上 / 左 永远是外轮廓；右 / 下在挤出时是接缝，交给远端轮廓去接。
     drawLine(Color(0x88FFFFFF), Offset(crf, hairPx()), Offset(sw - crf, hairPx()), strokeWidth = 1.5f * density)
     drawLine(Color(0x66FFFFFF), Offset(hairPx(), crf), Offset(hairPx(), sh - crf), strokeWidth = 1.5f * density)
-    drawLine(Color(0x33000000), Offset(sw - hairPx() * 1.5f, crf), Offset(sw - hairPx() * 1.5f, sh - crf), strokeWidth = 1.5f * density)
-    drawRoundRect(lerp(shellTint, Color.White, 0.45f).copy(alpha = 0.62f), Offset(0f, 0f), Size(sw, sh), cr, style = Stroke(hairPx() * 1.4f))
+    if (!wallR) {
+        drawLine(Color(0x4DFFFFFF), Offset(sw - hairPx() * 1.5f, crf), Offset(sw - hairPx() * 1.5f, sh - crf), strokeWidth = 1.5f * density)
+    }
+    if (!wallD) {
+        drawLine(Color(0x3DFFFFFF), Offset(crf, sh - hairPx() * 1.5f), Offset(sw - crf, sh - hairPx() * 1.5f), strokeWidth = 1.2f * density)
+    }
+    clipRect(0f, 0f, faceClipR, faceClipB) {
+        drawRoundRect(
+            lerp(shellTint, Color.White, 0.45f).copy(alpha = 0.62f),
+            Offset(0f, 0f), Size(sw, sh), cr, style = Stroke(hairPx() * 1.4f),
+        )
+    }
 
     // ============ 10. 螺丝：四角 + 开口边中点；右侧两颗是红色塑料（结构图特征） ============
     val sr = sw * 0.020f
@@ -506,49 +677,12 @@ private fun DrawScope.hub(cx: Float, cy: Float, r: Float, angleDeg: Float, st: C
 }
 
 /**
- * 空卡座的走带机构：两根驱动轴、压带轮、磁头块、导轨。
  * 「卡座是空的」这一状态也必须精确、安静 —— 而且一个字都不写。
+ *
+ * 注意：空卡座 / 外屏空磁带窗的走带结构已经统一到 [drawEmptyWell]（Mechanism.kt）——
+ * 磁头块、压带轮、主导轴、导带轮、带盘轴都在那儿，**别在这里再画一份近似版**：
+ * 外屏关着时露的就是同一个机构，两处画得不一样，翻开一看就露馅。
  */
-fun DrawScope.drawMechanism(w: Float, h: Float) {
-    val sw = w
-    val sh = h
-    val hubX = sw * 0.5f
-    val topY = sh * HUB_V_TOP
-    val botY = sh * HUB_V_BOT
-    val hubR = sw * HUB_R
-
-    drawRoundRect(
-        Color(0x12FFFFFF), Offset(sw * 0.055f, sh * 0.035f), Size(sw * 0.89f, sh * 0.93f),
-        CornerRadius(sw * 0.02f),
-    )
-    drawRoundRect(
-        Color(0x33A8A9A5), Offset(sw * 0.055f, sh * 0.035f), Size(sw * 0.89f, sh * 0.93f),
-        CornerRadius(sw * 0.02f), style = Stroke(hairPx()),
-    )
-
-    listOf(topY, botY).forEach { y ->
-        drawCircle(Color(0x2EFFFFFF), hubR * 1.35f, Offset(hubX, y))
-        val teeth = polygon(hubX, y, hubR, 6, 0f)
-        drawPath(teeth, Color(0x55CFCDC6))
-        drawPath(teeth, Color(0x99CFCDC6), style = Stroke(linePx()))
-        drawCircle(Color(0x55EDEBE4), hubR * 0.38f, Offset(hubX, y))
-    }
-
-    val rollX = sw * 0.175f
-    drawCircle(Color(0x551C1C1C), sw * 0.045f, Offset(rollX, sh * 0.40f))
-    drawCircle(Color(0x88CFCDC6), sw * 0.045f, Offset(rollX, sh * 0.40f), style = Stroke(linePx()))
-    drawRoundRect(
-        Color(0x662A2A2A), Offset(sw * 0.10f, sh * 0.47f), Size(sw * 0.10f, sh * 0.06f),
-        CornerRadius(sw * 0.01f),
-    )
-    drawRoundRect(
-        Color(0x55A8A9A5), Offset(sw * 0.10f, sh * 0.47f), Size(sw * 0.10f, sh * 0.06f),
-        CornerRadius(sw * 0.01f), style = Stroke(hairPx()),
-    )
-
-    hair(sw * 0.075f, sh * 0.20f, sw * 0.925f, sh * 0.20f, Color(0x2EA8A9A5))
-    hair(sw * 0.075f, sh * 0.80f, sw * 0.925f, sh * 0.80f, Color(0x2EA8A9A5))
-}
 
 /** 卡座凹槽：全机唯一的深色块。 */
 fun DrawScope.drawDeckRecess(x: Float, y: Float, w: Float, h: Float) {

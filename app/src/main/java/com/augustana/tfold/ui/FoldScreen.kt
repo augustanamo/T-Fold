@@ -17,8 +17,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -231,13 +233,24 @@ private fun FlightLayer(machine: FoldMachine, density: Float) {
 }
 
 /**
- * 一盘飞行中的磁带：沿 src→dst 的弧线走。
+ * 一盘飞行中的磁带：沿 src→dst 的弧线走，**并且是一块有厚度的塑料**。
  *
  * p = 0 是**躺在盒腔里**的静止位（这一点很关键：装带时盒子一开，带子就已经在那儿了）：
  *  —— 尺寸比盒子收一圈（盒与带同为 1.56 宽高比），中心取偏盒口那一侧，
  *     于是它的两个轮毂正好落在盖板自由边之外，从盒口看得见；
  *  —— 出盒阶段（appear）再抬一点、开始沿弧线飞向卡座。
  * 退带就是这条路径的倒放：带子从右侧滑回盒腔、被盖板逐渐吃掉，盖合上。
+ *
+ * 立体感来自**四件事同时到中途最大**（[spin]，q = 0.5 时为 1）—— 原来只有平移 + 缩放，
+ * 所以看着像一张卡片滑过去：
+ *  · **偏航**：正面横向按 cos 收窄。带子在空中真的"转了一下"，而不是平移；
+ *  · **厚度**：侧壁露出来一道（[drawCassette] 的 depthX/depthY）。真实带盒 100×64×12mm，
+ *    厚度只有高度的 0.19 —— 绕竖轴转 26° 露出 0.19·sin26° ≈ 0.083 高的右侧壁，
+ *    略俯 22° 露出底缘同理。屏幕上看就是"它有边"；
+ *  · **投影**：壳外一圈软影，浮得越高越远越淡。
+ *
+ * 两头**必须回零**：盒里那盘留一点点斜角（它躺在盒腔里，本来就不是正面贴平），
+ * 落进卡座时则要完全归零 —— 卡座里那盘是正面贴平的，留一道侧壁会和它错位、像跳了一下。
  */
 private fun DrawScope.drawFlyingTape(
     tape: Tape,
@@ -256,9 +269,11 @@ private fun DrawScope.drawFlyingTape(
     val rest = CASSETTE_IN_BOX                     // 躺在盒里时的尺寸（相对盒宽）
     val restX = src.left + src.width * CASSETTE_IN_BOX_X   // 盒里的模位一带（盒腔模位按同一个数画）
     val lift = ramp(p2, 0f, appear) * 12f * density  // 出盒先抬一点，再飞
+    val dist = abs(dst.center.x - restX)
+    // 0 → 1 → 0：两头贴平、中途最立体
+    val spin = sin((PI * q).toFloat())
     val cx = mix(restX, dst.center.x, q)
-    val cy = mix(src.center.y, dst.center.y, q) -
-        lift - abs(dst.center.x - restX) * 0.12f * sin((PI * q).toFloat())
+    val cy = mix(src.center.y, dst.center.y, q) - lift - dist * 0.14f * spin
     // 尺寸在**出盒那一段**就长到卡座尺寸 —— 这一段大半还被盖板挡着。
     // 反过来（一路线性长大）会看到带子在半空里边飞边涨：两栏的尺度本来就不一样
     // （卡位盒小、卡座井大），只能挑个看不见的地方把差值补掉。
@@ -266,13 +281,53 @@ private fun DrawScope.drawFlyingTape(
     val sx = mix(rest, dst.width / boxW, sQ)
     val sy = mix(rest, dst.height / boxH, sQ)
 
-    // 围绕磁带中心做旋转/缩放（translate 到中心 → rotate/scale → 平移回左上角）
+    // ---- 立体：角度 → 侧壁位移 ----
+    val deg = (PI / 180f).toFloat()
+    val restBud = 1f - ramp(q, 0f, 0.25f)           // 盒里那点斜角，一起飞就收回
+    val yaw = (26f * spin + 11f * restBud) * deg    // 绕竖轴转：露出右侧壁
+    val pitch = (21f * spin + 15f * restBud) * deg  // 略俯视：露出底缘
+    // 真实带盒厚 12mm ÷ 宽 63.8mm = 0.19 × **宽度**。
+    // 别写成 boxH * 0.19 —— 带子是竖着画的（h = 1.56w），那样侧壁会厚出 56%，
+    // 一整条宽边摊在右边，"一片玻璃"就更像"两片"了。
+    val thick = boxW * 0.19f
+    val depX = thick * sin(yaw)
+    val depY = thick * sin(pitch)
+    // 正面横向收窄（偏航的前缩）：两头严格 1.0，免得和盒腔 / 卡座里那盘对不上
+    val faceX = 1f - 0.11f * spin
+
     withTransform({
         translate(cx, cy)
-        rotate(-9f * sin((PI * q).toFloat()), pivot = Offset.Zero)
-        scale(sx, sy, pivot = Offset.Zero)
+        rotate(-8f * spin, pivot = Offset.Zero)
+        scale(sx * faceX, sy, pivot = Offset.Zero)
         translate(-boxW / 2f, -boxH / 2f)
     }) {
+        // 投影：只画在**带子之外**。清壳是半透明的，影子压进壳里会像糊了一块脏东西；
+        // 而且"物体挡住自己的影子"本来也是对的。
+        // 带子真正占的地方是 [0,boxW+depX]×[0,boxH+depY]（侧壁朝右 / 下挤出），
+        // 影子得正好被这块挡住，不是四边都往外扩一圈
+        val slab = Path().apply {
+            addRoundRect(
+                RoundRect(0f, 0f, boxW + depX, boxH + depY, CornerRadius(boxW * 0.05f))
+            )
+        }
+        val outside = Path.combine(
+            PathOperation.Difference,
+            Path().apply { addRect(Rect(-boxW * 3f, -boxH * 3f, boxW * 4f, boxH * 4f)) },
+            slab,
+        )
+        // 浮得越高：影子落得越远、越大、越淡；落座前淡出，把卡座交还给卡座自己的画法
+        val fly = spin * (1f - ramp(q, 0.88f, 1f))
+        clipPath(outside) {
+            softShadow(
+                footW = boxW * 0.96f,
+                footH = boxH * 0.96f,
+                centerX = boxW * 0.5f + depX * 0.6f + boxW * 0.02f,
+                centerY = boxH * 0.5f + boxH * (0.13f + 0.15f * fly),
+                r = boxW * 0.05f,
+                alpha = 0.15f * (0.42f + 0.58f * spin) * (1f - ramp(q, 0.88f, 1f)),
+            )
+        }
+
         drawCassette(
             w = boxW,
             h = boxH,
@@ -281,6 +336,34 @@ private fun DrawScope.drawFlyingTape(
             angleTop = 0f,
             angleBot = 0f,
             tint = tint,
+            depthX = depX,
+            depthY = depY,
+        )
+    }
+}
+
+/**
+ * 软影：几层**逐渐长大、逐渐变淡**的圆角矩形叠出模糊感（Canvas 没有高斯模糊）。
+ * 层数不多是有意的 —— 这东西每帧都要画，层数就是这里的成本。
+ */
+private fun DrawScope.softShadow(
+    footW: Float,
+    footH: Float,
+    centerX: Float,
+    centerY: Float,
+    r: Float,
+    alpha: Float,
+) {
+    if (alpha <= 0.002f) return
+    val layers = 5
+    for (i in 0 until layers) {
+        val k = i / (layers - 1f)
+        drawRoundRect(
+            Color(0xFF14120F),
+            topLeft = Offset(centerX - footW * (0.5f + 0.035f * k), centerY - footH * (0.5f + 0.035f * k)),
+            size = Size(footW * (1f + 0.07f * k), footH * (1f + 0.07f * k)),
+            cornerRadius = CornerRadius(r * (1f + 0.12f * k)),
+            alpha = alpha * (1f - 0.55f * k) * 0.42f,
         )
     }
 }

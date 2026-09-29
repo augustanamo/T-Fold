@@ -15,23 +15,15 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.ImageShader
-import androidx.compose.ui.graphics.Paint
-import androidx.compose.ui.graphics.ShaderBrush
-import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.scale
-import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
 import com.augustana.tfold.machine.FoldMachine
-import com.augustana.tfold.ui.parts.CASSETTE_H_RATIO
-import com.augustana.tfold.ui.parts.drawCassette
+import com.augustana.tfold.ui.parts.WellLayout
+import com.augustana.tfold.ui.parts.deckWeaveBrush
+import com.augustana.tfold.ui.parts.drawWellInterior
 import com.augustana.tfold.ui.parts.hairPx
 import com.augustana.tfold.ui.parts.led
-import kotlin.math.cos
-import kotlin.math.sin
 
 /**
  * 右栏：卡座 —— 复刻 viditb 概念片的展开态右屏，**一个字都没有**。
@@ -70,40 +62,26 @@ fun DeckPane(
         val wellW = wellR - wellL
         val wellH = wellB - wellT
 
-        // 磁带落座位：井内偏左，开口边朝右对着机构列。
-        // 尺寸拉到井宽的 0.72（原来 0.56 显得"小一圈"）：带子右缘离上方磁头组的压带轮
-        // 只剩几十像素 —— 真机上带子就是贴着压带轮/主导轴那一列走的。
-        // 高度上限 0.86 井高只是兜底（1.56 的宽高比下先卡住的总是宽度）。
-        val cassW = minOf(wellW * 0.72f, wellH * 0.86f / CASSETTE_H_RATIO)
-        val cassH = cassW * CASSETTE_H_RATIO
-        val cassX = wellL + wellW * 0.40f - cassW / 2f
-        val cassY = wellT + (wellH - cassH) / 2f
-
-        // 机构列：井内右侧
-        val mechX = wellL + wellW * 0.80f
-        // 左缘刻度槽
-        val scaleX = wellL + wellW * 0.075f
+        // 井里那套几何（带子多大 / 落在哪 / 机构列在哪儿 / 零件多大）**只有一份**，
+        // 在 `ui.parts.WellLayout` —— 外屏面板底下垫的也是它。别在这儿再摊开算一遍：
+        // 曾经外屏另起一套，结果内外两块屏上同一台机器长得不一样。
+        val well = WellLayout(wellL * u, wellT * u, wellW * u, wellH * u)
 
         // 门板织纹：一块小瓦片平铺，只建一次
-        val weave = remember { doorWeaveBrush() }
+        val weave = remember { deckWeaveBrush() }
 
-        LaunchedEffect(realW, realH) {
+        LaunchedEffect(realW, realH, well.cassX, well.cassY) {
             machine.slotRect = Rect(
-                realW + cassX * u,
-                cassY * u,
-                realW + (cassX + cassW) * u,
-                (cassY + cassH) * u,
+                realW + well.cassX,
+                well.cassY,
+                realW + well.cassX + well.cassW,
+                well.cassY + well.cassH,
             )
         }
 
         Canvas(Modifier.fillMaxSize()) {
             drawRect(C.DoorEdge, Offset.Zero, size)
-            drawDeck(
-                machine, u, weave,
-                doorL, doorT, doorR, doorB,
-                wellL, wellT, wellW, wellH, mechX, scaleX,
-                cassX, cassY, cassW, cassH,
-            )
+            drawDeck(machine, u, weave, doorL, doorT, doorR, doorB, well)
         }
 
         Box(
@@ -114,7 +92,8 @@ fun DeckPane(
                     detectTapGestures { pos ->
                         if (machine.busy) return@detectTapGestures
                         val cassette = Rect(
-                            cassX * u, cassY * u, (cassX + cassW) * u, (cassY + cassH) * u
+                            well.cassX, well.cassY,
+                            well.cassX + well.cassW, well.cassY + well.cassH,
                         )
                         if (machine.loadedId != null && cassette.contains(pos)) machine.eject()
                     }
@@ -124,28 +103,9 @@ fun DeckPane(
 }
 
 // ---------------------------------------------------------------- 门板与织纹
-
-/** 门板织纹：18px 瓦片，正交细线平铺 —— 概念片门板那种织物/碳纹质感。 */
-private fun doorWeaveBrush(): Brush {
-    val tile = ImageBitmap(18, 18)
-    val canvas = androidx.compose.ui.graphics.Canvas(tile)
-    val p = Paint().apply {
-        color = C.DoorWeave
-        strokeWidth = 1f
-    }
-    canvas.drawLine(Offset(0f, 0.5f), Offset(18f, 0.5f), p)
-    canvas.drawLine(Offset(0.5f, 0f), Offset(0.5f, 18f), p)
-    val p2 = Paint().apply {
-        color = Color(0x08FFFFFF)
-        strokeWidth = 1f
-    }
-    canvas.drawLine(Offset(9f, 0f), Offset(9f, 18f), p2)
-    canvas.drawLine(Offset(0f, 9f), Offset(18f, 9f), p2)
-    val shader = ImageShader(tile, TileMode.Repeated, TileMode.Repeated)
-    return object : ShaderBrush() {
-        override fun createShader(size: Size) = shader
-    }
-}
+//
+// 织纹刷子（deckWeaveBrush）也搬到 `ui.parts`（Mechanism.kt）了 —— 外屏那扇磁带窗
+// 没有带子时铺的是**同一块织纹**，两处各建一份瓦片纯属浪费。
 
 /** 门板螺丝：一颗圆 + 一道一字槽。 */
 private fun DrawScope.screw(cx: Float, cy: Float, r: Float) {
@@ -165,63 +125,9 @@ private fun DrawScope.screw(cx: Float, cy: Float, r: Float) {
 }
 
 // ---------------------------------------------------------------- 读带机构件
-
-/** 六角形（主导轴 / 带盘轴孔）。 */
-private fun hexPath(cx: Float, cy: Float, r: Float): androidx.compose.ui.graphics.Path {
-    val path = androidx.compose.ui.graphics.Path()
-    for (i in 0 until 6) {
-        val a = Math.toRadians(i * 60.0 - 90.0)
-        val x = cx + cos(a).toFloat() * r
-        val y = cy + sin(a).toFloat() * r
-        if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-    }
-    path.close()
-    return path
-}
-
-/** 磁头块：一小方金属块，工作面一道细缝。 */
-private fun DrawScope.headBlock(cx: Float, cy: Float, s: Float) {
-    drawRoundRect(
-        Color(0xB06E6E6A), Offset(cx - s / 2f, cy - s * 0.7f), Size(s, s * 1.4f),
-        CornerRadius(s * 0.12f),
-    )
-    drawRoundRect(
-        Color(0x33FFFFFF), Offset(cx - s / 2f, cy - s * 0.7f), Size(s, s * 1.4f),
-        CornerRadius(s * 0.12f), style = Stroke(hairPx()),
-    )
-    drawLine(
-        Color(0xCC000000), Offset(cx - s * 0.28f, cy), Offset(cx + s * 0.28f, cy),
-        strokeWidth = hairPx(),
-    )
-}
-
-/** 压带轮：黑色橡胶轮 + 金属轴心。 */
-private fun DrawScope.pinchRoller(cx: Float, cy: Float, r: Float) {
-    drawCircle(Color(0xFF050505), r, Offset(cx, cy))
-    drawCircle(Color(0x42FFFFFF), r, Offset(cx, cy), style = Stroke(hairPx()))
-    drawCircle(Color(0x99A8A9A5), r * 0.28f, Offset(cx, cy))
-}
-
-/** 主导轴：金属六角轴。 */
-private fun DrawScope.capstan(cx: Float, cy: Float, r: Float) {
-    drawPath(hexPath(cx, cy, r), Color(0x99CFCDC6))
-    drawPath(hexPath(cx, cy, r), Color(0x4DFFFFFF), style = Stroke(hairPx()))
-    drawCircle(Color(0xFF0A0A0A), r * 0.34f, Offset(cx, cy))
-}
-
-/** 导带轮：一道金属环。 */
-private fun DrawScope.guideRing(cx: Float, cy: Float, r: Float) {
-    drawCircle(Color(0x59000000), r, Offset(cx, cy))
-    drawCircle(Color(0x8CCFCDC6), r, Offset(cx, cy), style = Stroke(1f * density))
-    drawCircle(Color(0xFF0A0A0A), r * 0.36f, Offset(cx, cy))
-}
-
-/** 带盘轴（空井时留在轮毂位置）：金属环 + 六角孔。 */
-private fun DrawScope.reelTable(cx: Float, cy: Float, r: Float) {
-    drawCircle(Color(0x38FFFFFF), r, Offset(cx, cy), style = Stroke(1.2f * density))
-    drawPath(hexPath(cx, cy, r * 0.42f), Color(0x8CCFCDC6))
-    drawPath(hexPath(cx, cy, r * 0.42f), Color(0x33FFFFFF), style = Stroke(hairPx()))
-}
+//
+// 磁头块 / 压带轮 / 主导轴 / 导带轮 / 带盘轴这一套已经搬到 `ui.parts`（Mechanism.kt）——
+// 外屏关着时那扇磁带窗里没有带子，露的就是同一套结构，两边必须长得一样。
 
 // ---------------------------------------------------------------- 井
 
@@ -237,16 +143,8 @@ private fun DrawScope.drawDeck(
     doorT: Float,
     doorR: Float,
     doorB: Float,
-    wellL: Float,
-    wellT: Float,
-    wellW: Float,
-    wellH: Float,
-    mechX: Float,
-    scaleX: Float,
-    cassX: Float,
-    cassY: Float,
-    cassW: Float,
-    cassH: Float,
+    /** 井里那套几何（含带子、机构列、刻度槽、零件尺寸）—— 与外屏面板底下垫的那层同一份。 */
+    well: WellLayout,
 ) {
     // 每帧重绘：走带时轮毂转角在变
     @Suppress("UNUSED_EXPRESSION")
@@ -272,104 +170,30 @@ private fun DrawScope.drawDeck(
     screw(dl + so, dt + dh - so, sr)
     screw(dl + dw - so, dt + dh - so, sr)
 
-    // ---- 读带井：门板里铣下去的暗腔
-    val wl = wellL * u
-    val wt = wellT * u
-    val ww = wellW * u
-    val wh = wellH * u
-    val wcr = CornerRadius(4f * density)
-    drawRoundRect(Color(0xFF0B0B0B), Offset(wl, wt), Size(ww, wh), wcr)
-    drawRoundRect(weave, Offset(wl, wt), Size(ww, wh), wcr)
-    // 井口内阴影：井是"凹下去"的 —— 顶边一道落影、底边一线受光
-    drawRect(
-        Brush.verticalGradient(0f to Color(0x59000000), 1f to Color.Transparent),
-        Offset(wl, wt), Size(ww, wh * 0.10f),
+    // ---- 读带井 + 刻度槽 + 机构列 + 磁带：**共享实现**（内屏卡座 / 外屏面板底下同一份）
+    drawWellInterior(
+        L = well,
+        weave = weave,
+        tape = machine.loadedTape,
+        tapePos = machine.tapePos,
+        angleTop = machine.spinTop,
+        angleBot = machine.spinBot,
+        tint = machine.loadedTape?.let { machine.tintFor(it) },
+        shadowOffset = u * 0.8f,
     )
-    drawRect(
-        Brush.horizontalGradient(0f to Color(0x33000000), 1f to Color.Transparent),
-        Offset(wl, wt), Size(ww * 0.06f, wh),
+    // 井口的"铣边"：上左暗、下右一线受光（这圈是**门板**的边，所以在共享实现之外）
+    drawRoundRect(
+        Color(0x33000000), Offset(well.l, well.t), Size(well.w, well.h),
+        CornerRadius(well.corner), style = Stroke(1.5f * density),
     )
-    drawRect(
-        Brush.horizontalGradient(0f to Color.Transparent, 1f to Color(0x33000000)),
-        Offset(wl + ww * 0.94f, wt), Size(ww * 0.06f, wh),
+    drawRoundRect(
+        Color(0x1AFFFFFF), Offset(well.l, well.t + well.h - hairPx() * 2f),
+        Size(well.w, hairPx() * 2f), CornerRadius(0f),
     )
-    drawRect(
-        Brush.verticalGradient(0f to Color.Transparent, 1f to Color(0x1FFFFFFF)),
-        Offset(wl, wt + wh * 0.96f), Size(ww, wh * 0.04f),
-    )
-    // 井口的"铣边"：上左暗、下右一线受光
-    drawRoundRect(Color(0x33000000), Offset(wl, wt), Size(ww, wh), wcr, style = Stroke(1.5f * density))
-    drawRoundRect(Color(0x1AFFFFFF), Offset(wl, wt + wh - hairPx() * 2f), Size(ww, hairPx() * 2f), CornerRadius(0f))
-
-    // ---- 左缘刻度槽（走带标尺，无字）
-    val sx = scaleX * u
-    val tickTop = wt + wh * 0.12f
-    val tickBot = wt + wh * 0.88f
-    drawLine(Color(0x2EFFFFFF), Offset(sx, tickTop), Offset(sx, tickBot), strokeWidth = hairPx())
-    val ticks = 14
-    for (i in 0..ticks) {
-        val ty = tickTop + (tickBot - tickTop) * i / ticks
-        val major = i % 4 == 0
-        val len = (if (major) 5f else 2.6f) * density
-        drawLine(
-            Color(if (major) 0x59FFFFFF else 0x2EFFFFFF),
-            Offset(sx, ty), Offset(sx + len, ty),
-            strokeWidth = hairPx(),
-        )
-    }
-
-    // ---- 右侧读带机构列（空井也在 —— 它就是这台机器的"读带结构"）
-    val mx = mechX * u
-    val headS = 7f * density
-    val rollerR = 5.5f * density
-    val capR = 3f * density
-    val guideR = 4.5f * density
-    // 上磁头组：磁头块 + 压带轮 + 主导轴
-    headBlock(mx + headS * 0.9f, wt + wh * 0.185f, headS)
-    pinchRoller(mx - rollerR * 0.6f, wt + wh * 0.235f, rollerR)
-    capstan(mx + capR * 1.9f, wt + wh * 0.245f, capR)
-    // 上导带轮
-    guideRing(mx, wt + wh * 0.36f, guideR)
-    // 下导带轮
-    guideRing(mx, wt + wh * 0.64f, guideR)
-    // 下磁头组：主导轴 + 磁头块
-    capstan(mx + capR * 1.9f, wt + wh * 0.755f, capR)
-    headBlock(mx + headS * 0.9f, wt + wh * 0.815f, headS)
-
-    // ---- 磁带 / 空井
-    val tape = machine.loadedTape
-    val cxp = cassX * u
-    val cyp = cassY * u
-    val cw = cassW * u
-    val ch = cassH * u
-    if (tape != null) {
-        // 磁带在井里的落影
-        drawRoundRect(
-            Color(0x66000000), Offset(cxp + u * 0.5f, cyp + u * 0.8f),
-            Size(cw, ch), CornerRadius(cw * 0.04f),
-        )
-        // 水平镜像：让磁带的开口边朝右，对着读带机构（pivot 必须显式给磁带中心，
-        // 默认 pivot 是整个画布的 center，会把磁带翻到画面外）
-        translate(cxp, cyp) {
-            scale(-1f, 1f, pivot = Offset(cw / 2f, ch / 2f)) {
-                drawCassette(
-                    w = cw,
-                    h = ch,
-                    tape = tape,
-                    tapePos = machine.tapePos,
-                    angleTop = machine.angleTop,
-                    angleBot = machine.angleBot,
-                    tint = machine.tintFor(tape),
-                )
-            }
-        }
-    } else {
-        // 空井：两个带盘轴留在轮毂位置
-        val hubR = cw * 0.115f
-        reelTable(cxp + cw / 2f, cyp + ch * 0.288f, hubR * 1.5f)
-        reelTable(cxp + cw / 2f, cyp + ch * 0.712f, hubR * 1.5f)
-    }
 
     // 「还没装曲目」警示灯：门板右上角螺丝内侧一颗安全橙小灯
-    led(dl + dw - 15f * density, dt + 30f * density, 3.4f * density, on = tape != null && !machine.hasAudio(tape.id))
+    led(
+        dl + dw - 15f * density, dt + 30f * density, 3.4f * density,
+        on = machine.loadedTape?.let { !machine.hasAudio(it.id) } == true,
+    )
 }
