@@ -144,15 +144,38 @@ fun DrawScope.drawWellInterior(
 
     // ---- 磁带 / 空井
     if (tape != null) {
+        val shellTint = tint ?: shellTintOf(tape)
+        val glow = glowOf(shellTint)
         if (shadowOffset > 0f) {
+            // 磁带在井底的立体落影
             drawRoundRect(
-                Color(0x66000000),
-                Offset(L.cassX + shadowOffset * 0.5f, L.cassY + shadowOffset * 0.8f),
-                Size(L.cassW, L.cassH), CornerRadius(L.cassW * 0.04f),
+                Color(0x78000000),
+                Offset(L.cassX + shadowOffset * 0.6f, L.cassY + shadowOffset * 1.1f),
+                Size(L.cassW, L.cassH), CornerRadius(L.cassW * 0.045f),
             )
         }
+        // 清壳底缘透光映在黑色井底上的漫反射（Ambient Well Bounce）：磁带坐在碳纹井底上，
+        // 它底缘那圈彩色透光会在四周的黑底上留下很弱的一层同色反照。少了这一层，磁带看着像
+        // "贴在井底的一张图"；有了它才是"落在井里的一件东西"。
+        drawCircle(
+            Brush.radialGradient(
+                0f to glow.copy(alpha = 0.16f),
+                1f to Color.Transparent,
+                center = Offset(L.cassX + L.cassW * 0.5f, L.cassY + L.cassH * 0.96f),
+                radius = L.cassW * 0.55f,
+            ),
+            radius = L.cassW * 0.55f,
+            center = Offset(L.cassX + L.cassW * 0.5f, L.cassY + L.cassH * 0.96f),
+        )
         // 水平镜像：让磁带的开口边朝右，对着读带机构（pivot 必须显式给磁带中心，
-        // 默认 pivot 是整块画布的 center，会把磁带翻到画面外）
+        // 默认 pivot 是整块画布的 center，会把磁带翻到画面外）。
+        //
+        // **但镜像会顺手把光源也翻过去** —— 全机的高光都是"左上受光"（轮毂法盘、带盘丝光、
+        // 螺丝径向渐变、壳面折射高光带、四缘倒角亮边），一镜像全跑到右上，卡座里那盘带
+        // 就成了全场唯一"光从右边来"的东西。这是最难看出来的穿帮：单看卡座没毛病，
+        // 一旦和飞过来那盘（没镜像）或盒里那盘摆在一起，两边的高光方向是拧的。
+        // 所以把镜像这件事显式告诉 drawCassette，由它把光源相关的偏移全部反号补偿回来 ——
+        // 几何照旧镜像，光还是从左上打。
         translate(L.cassX, L.cassY) {
             scale(-1f, 1f, pivot = Offset(L.cassW / 2f, L.cassH / 2f)) {
                 drawCassette(
@@ -163,6 +186,7 @@ fun DrawScope.drawWellInterior(
                     angleTop = angleTop,
                     angleBot = angleBot,
                     tint = tint,
+                    mirrored = true,
                 )
             }
         }

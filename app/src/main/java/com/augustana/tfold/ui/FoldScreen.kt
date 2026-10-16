@@ -220,12 +220,32 @@ private fun FlightLayer(machine: FoldMachine, density: Float) {
         clipPath(visible) {
             machine.incoming?.let { id ->
                 machine.tapeById(id)?.let { tape ->
-                    drawFlyingTape(tape, machine.flyIn.value, src, dst, density, machine.tintFor(tape))
+                    drawFlyingTape(
+                        tape = tape,
+                        p = machine.flyIn.value,
+                        src = src,
+                        dst = dst,
+                        density = density,
+                        tint = machine.tintFor(tape),
+                        tapePos = 0f,
+                        angleTop = 0f,
+                        angleBot = 0f,
+                    )
                 }
             }
             machine.outgoing?.let { id ->
                 machine.tapeById(id)?.let { tape ->
-                    drawFlyingTape(tape, machine.flyOut.value, src, dst, density, machine.tintFor(tape))
+                    drawFlyingTape(
+                        tape = tape,
+                        p = machine.flyOut.value,
+                        src = src,
+                        dst = dst,
+                        density = density,
+                        tint = machine.tintFor(tape),
+                        tapePos = machine.tapePos,
+                        angleTop = machine.spinTop,
+                        angleBot = machine.spinBot,
+                    )
                 }
             }
         }
@@ -251,6 +271,22 @@ private fun FlightLayer(machine: FoldMachine, density: Float) {
  *
  * 两头**必须回零**：盒里那盘留一点点斜角（它躺在盒腔里，本来就不是正面贴平），
  * 落进卡座时则要完全归零 —— 卡座里那盘是正面贴平的，留一道侧壁会和它错位、像跳了一下。
+ *
+ * **朝向也必须和卡座一致**（见函数末尾那层 `scale(-1f, 1f)`）：卡座里那盘是 Well.kt 镜像画的，
+ * 所以空中这盘同样镜像（并且把 `mirrored` 一并传下去做光源补偿）。q = 1 时两者的几何、光向、
+ * 轮毂角度全部同源，落座那一帧不存在"翻个面"。
+ *
+ * 带盘**不是从零开始转的**：退带时把 [tapePos] / [angleTop] / [angleBot] 由调用方传进来 ——
+ * 那盘带刚刚在卡座里卷到哪儿、轮毂停在哪，飞出来就得还是那个样子。这三个值一旦写死 0，
+ * 一按退带盘径就跳回满盘、轮毂"啪"地归零，一眼穿帮。装带（incoming）相反：那是刚从盒腔
+ * 取出来的带，三个值都传 0。
+ *
+ * 落座那一下有**机械按压**（seatDip / seatPressScale，q = 0.84..1.0）：带子下沉 3.5dp
+ * 再弹回、同时收 1.4% —— 真实卡座是把带盒压进定位销的。少了它，带子像贴纸一样"啪"一下
+ * 贴上去，没有重量。
+ *
+ * 影子不是死黑的灰：清壳是**透明彩色**的，阳光穿过它会在台面上留一点壳体本色的折射色斑
+ * （Caustics）。半空中那点 tint 就是干这个用的，随影子一起淡出。
  */
 private fun DrawScope.drawFlyingTape(
     tape: Tape,
@@ -259,40 +295,41 @@ private fun DrawScope.drawFlyingTape(
     dst: Rect,
     density: Float,
     tint: Color,
+    tapePos: Float,
+    angleTop: Float,
+    angleBot: Float,
 ) {
     val p2 = p.coerceIn(0f, 1f)
-    val appear = 0.18f                              // 「出盒 / 回盒」阶段占比
-    val q = ramp(p2, appear, 1f)                    // 飞行阶段 0..1
+    val appear = 0.18f
+    val q = ramp(p2, appear, 1f)
 
     val boxW = src.width
     val boxH = src.height
-    val rest = CASSETTE_IN_BOX                     // 躺在盒里时的尺寸（相对盒宽）
-    val restX = src.left + src.width * CASSETTE_IN_BOX_X   // 盒里的模位一带（盒腔模位按同一个数画）
-    val lift = ramp(p2, 0f, appear) * 12f * density  // 出盒先抬一点，再飞
+    val rest = CASSETTE_IN_BOX
+    val restX = src.left + src.width * CASSETTE_IN_BOX_X
+    val lift = ramp(p2, 0f, appear) * 12f * density
     val dist = abs(dst.center.x - restX)
-    // 0 → 1 → 0：两头贴平、中途最立体
     val spin = sin((PI * q).toFloat())
-    val cx = mix(restX, dst.center.x, q)
-    val cy = mix(src.center.y, dst.center.y, q) - lift - dist * 0.14f * spin
-    // 尺寸在**出盒那一段**就长到卡座尺寸 —— 这一段大半还被盖板挡着。
-    // 反过来（一路线性长大）会看到带子在半空里边飞边涨：两栏的尺度本来就不一样
-    // （卡位盒小、卡座井大），只能挑个看不见的地方把差值补掉。
-    val sQ = ramp(p2, 0f, appear * 1.6f)
-    val sx = mix(rest, dst.width / boxW, sQ)
-    val sy = mix(rest, dst.height / boxH, sQ)
 
-    // ---- 立体：角度 → 侧壁位移 ----
+    // 落座瞬间的机械按压微震（q 在 0.85..1.0 之间轻微下沉入卡槽再回正）
+    val seatPhase = ramp(q, 0.84f, 1f)
+    val seatDip = sin((PI * seatPhase).toFloat()) * 3.5f * density
+
+    val cx = mix(restX, dst.center.x, q)
+    val cy = mix(src.center.y, dst.center.y, q) - lift * (1f - seatPhase) - dist * 0.14f * spin + seatDip
+
+    val sQ = ramp(p2, 0f, appear * 1.6f)
+    val seatPressScale = 1f - 0.014f * sin((PI * seatPhase).toFloat())
+    val sx = mix(rest, dst.width / boxW, sQ) * seatPressScale
+    val sy = mix(rest, dst.height / boxH, sQ) * seatPressScale
+
     val deg = (PI / 180f).toFloat()
-    val restBud = 1f - ramp(q, 0f, 0.25f)           // 盒里那点斜角，一起飞就收回
-    val yaw = (26f * spin + 11f * restBud) * deg    // 绕竖轴转：露出右侧壁
-    val pitch = (21f * spin + 15f * restBud) * deg  // 略俯视：露出底缘
-    // 真实带盒厚 12mm ÷ 宽 63.8mm = 0.19 × **宽度**。
-    // 别写成 boxH * 0.19 —— 带子是竖着画的（h = 1.56w），那样侧壁会厚出 56%，
-    // 一整条宽边摊在右边，"一片玻璃"就更像"两片"了。
+    val restBud = 1f - ramp(q, 0f, 0.25f)
+    val yaw = (26f * spin + 11f * restBud) * deg
+    val pitch = (21f * spin + 15f * restBud) * deg
     val thick = boxW * 0.19f
     val depX = thick * sin(yaw)
     val depY = thick * sin(pitch)
-    // 正面横向收窄（偏航的前缩）：两头严格 1.0，免得和盒腔 / 卡座里那盘对不上
     val faceX = 1f - 0.11f * spin
 
     withTransform({
@@ -301,10 +338,6 @@ private fun DrawScope.drawFlyingTape(
         scale(sx * faceX, sy, pivot = Offset.Zero)
         translate(-boxW / 2f, -boxH / 2f)
     }) {
-        // 投影：只画在**带子之外**。清壳是半透明的，影子压进壳里会像糊了一块脏东西；
-        // 而且"物体挡住自己的影子"本来也是对的。
-        // 带子真正占的地方是 [0,boxW+depX]×[0,boxH+depY]（侧壁朝右 / 下挤出），
-        // 影子得正好被这块挡住，不是四边都往外扩一圈
         val slab = Path().apply {
             addRoundRect(
                 RoundRect(0f, 0f, boxW + depX, boxH + depY, CornerRadius(boxW * 0.05f))
@@ -315,30 +348,58 @@ private fun DrawScope.drawFlyingTape(
             Path().apply { addRect(Rect(-boxW * 3f, -boxH * 3f, boxW * 4f, boxH * 4f)) },
             slab,
         )
-        // 浮得越高：影子落得越远、越大、越淡；落座前淡出，把卡座交还给卡座自己的画法
         val fly = spin * (1f - ramp(q, 0.88f, 1f))
+        val shadowAlpha = 0.16f * (0.42f + 0.58f * spin) * (1f - ramp(q, 0.88f, 1f))
+        val shCx = boxW * 0.5f + depX * 0.6f + boxW * 0.02f
+        val shCy = boxH * 0.5f + boxH * (0.13f + 0.15f * fly)
+
         clipPath(outside) {
             softShadow(
                 footW = boxW * 0.96f,
                 footH = boxH * 0.96f,
-                centerX = boxW * 0.5f + depX * 0.6f + boxW * 0.02f,
-                centerY = boxH * 0.5f + boxH * (0.13f + 0.15f * fly),
+                centerX = shCx,
+                centerY = shCy,
                 r = boxW * 0.05f,
-                alpha = 0.15f * (0.42f + 0.58f * spin) * (1f - ramp(q, 0.88f, 1f)),
+                alpha = shadowAlpha,
             )
+            // 透明壳体的焦散透射色斑（Caustic Tint Glow）：阳光穿过透明带盒在桌面上留下的微弱彩色光影
+            if (shadowAlpha > 0.005f) {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(shCx - boxW * 0.42f, shCy - boxH * 0.42f),
+                    size = Size(boxW * 0.84f, boxH * 0.84f),
+                    cornerRadius = CornerRadius(boxW * 0.06f),
+                    alpha = shadowAlpha * 0.35f,
+                )
+            }
         }
 
-        drawCassette(
-            w = boxW,
-            h = boxH,
-            tape = tape,
-            tapePos = 0f,
-            angleTop = 0f,
-            angleBot = 0f,
-            tint = tint,
-            depthX = depX,
-            depthY = depY,
-        )
+        // **水平镜像**：卡座里那盘是 Well.kt 用 scale(-1f, 1f) 画的（开口边朝右、对着读带机构），
+        // 飞行途中不镜像的话，落座那一瞬整盘带会左右翻一次 —— 收带盘从左边跳到右边、红色螺丝
+        // 换到另一侧、轮毂辐条反着转，比任何侧壁错位都显眼。这里用同一套镜像，再加上
+        // mirrored = true（光源补偿），飞行中的带子和它在井里时是**同一副面孔**。
+        withTransform({
+            // pivot 必须显式给磁带中心：默认 pivot 是整块画布中心，会把磁带翻到画面外
+            scale(-1f, 1f, pivot = Offset(boxW / 2f, boxH / 2f))
+        }) {
+            drawCassette(
+                w = boxW,
+                h = boxH,
+                tape = tape,
+                tapePos = tapePos,
+                angleTop = angleTop,
+                angleBot = angleBot,
+                tint = tint,
+                // 外层镜像把挤出方向也翻到了屏左，这里将 depthX 取反，侧壁照旧朝屏右/屏下挤出，
+                // 立体感不变；同时让实际画出来的范围仍是 [0, boxW+depX]，与上面那圈影子蒙版
+                // （slab / outside）严丝合缝 —— 取正号的话磁带会向左探出蒙版、挨上一层脏影。
+                depthX = -depX,
+                depthY = depY,
+                // 关键：镜像还会把光源一起翻过去，必须告诉 drawCassette 反号补偿，
+                // 否则飞行中那盘带的高光跑到右上（全场唯一"光从右边来"的东西）。
+                mirrored = true,
+            )
+        }
     }
 }
 

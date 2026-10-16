@@ -231,6 +231,11 @@ class AudioEngine(context: Context) {
 
     fun key() = pool.play(sKey, 0.55f, 0.55f, 2, 0, 1f)
 
+    /**
+     * 装带 / 退带的机械音。**当前故意不在任何地方调用** —— 2026-10-16 用户明确要求
+     * 「装磁带和拿出来的时候不要有那个噪音」。素材仍在池里（想恢复只要接回去一行），
+     * 但别再往 `FoldMachine.insert()` / `eject()` 里挂了。
+     */
     fun insertClack() = pool.play(sInsert, 0.9f, 0.9f, 2, 0, 1f)
 
     fun ejectThunk() = pool.play(sEject, 0.9f, 0.9f, 2, 0, 1f)

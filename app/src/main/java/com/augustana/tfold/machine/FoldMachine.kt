@@ -762,7 +762,10 @@ class FoldMachine(
             hint("这盘已经在卡座里了")
             return
         }
-        audio.key()
+        // 装带 / 退带**不出任何音效**（2026-10-16 用户明确要求：不要那个噪音）。
+        // 机械音（insertClack / ejectThunk）不进这两条路径；动作起点那声按键"嗒"
+        // （audio.key）也一并去掉 —— 它正好落在装带那一刻，听感上属于同一次动作。
+        // 别的键（PLAY/FF/REW/REC）照旧有声。
         applyTransport(Transport.STOP)
         val prev = loadedId
         busy = true
@@ -783,7 +786,6 @@ class FoldMachine(
                 audio.detach()
                 flyOut.snapTo(1f)
                 flyOut.animateTo(0f, tween(700, easing = FastOutSlowInEasing))
-                audio.ejectThunk()
                 outgoing = null
                 flyOut.snapTo(0f)
                 // 磁带落回盒里 → 盖合上
@@ -804,7 +806,6 @@ class FoldMachine(
             box.animateTo(1f, tween(360, easing = FastOutSlowInEasing))
             delay(150)   // 留一拍：让眼睛看清"带子本来就在盒里"，别一开就飞走
             flyIn.animateTo(1f, tween(620, easing = FastOutSlowInEasing))
-            audio.insertClack()
 
             loadedId = target.id
             incoming = null
@@ -847,14 +848,13 @@ class FoldMachine(
             hint("卡座是空的")
             return
         }
-        audio.key()
+        // 退带同样静音（见 insert 里的说明）
         applyTransport(Transport.STOP)
         busy = true
         flightJob?.cancel()
         if (!opened) {
             loadedId = null
             audio.detach()
-            audio.ejectThunk()
             tapePos = 0f
             virtualMs = 0f
             angleTop = 0f
@@ -866,7 +866,6 @@ class FoldMachine(
             return
         }
         flightJob = scope.launch {
-            audio.ejectThunk()
             // 退带 = 装带的倒放：带子飞回盒里，然后盖合上。
             // 先滚回**这盘带自己的盒子** —— 用户在库里拖过之后，居中的那格通常是别的带，
             // 不滚回去的话这盘会被送回别人的卡位（"磁带回到别的盘的位置"）。
